@@ -24,6 +24,8 @@ public:
   AndroidHostInterface(jobject java_object, jobject context_object, std::string user_directory);
   ~AndroidHostInterface() override;
 
+  ALWAYS_INLINE ANativeWindow* GetSurface() const { return m_surface; }
+
   bool Initialize() override;
   void Shutdown() override;
 
@@ -42,6 +44,7 @@ public:
 
   bool IsEmulationThreadRunning() const { return m_emulation_thread_running.load(); }
   bool IsEmulationThreadPaused() const;
+  bool IsOnEmulationThread() const;
   void RunOnEmulationThread(std::function<void()> function, bool blocking = false);
   void PauseEmulationThread(bool paused);
   void StopEmulationThreadLoop();
@@ -107,6 +110,7 @@ private:
 
   std::atomic_bool m_emulation_thread_stop_request{false};
   std::atomic_bool m_emulation_thread_running{false};
+  std::thread::id m_emulation_thread_id{};
 
   HostDisplay::Alignment m_display_alignment = HostDisplay::Alignment::Center;
 

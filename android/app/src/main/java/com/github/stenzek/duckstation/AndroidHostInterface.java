@@ -25,6 +25,14 @@ public class AndroidHostInterface {
         this.mContext = context;
     }
 
+    public void reportError(String message) {
+        Toast.makeText(mContext, message, Toast.LENGTH_LONG).show();
+    }
+
+    public void reportMessage(String message) {
+        Toast.makeText(mContext, message, Toast.LENGTH_SHORT).show();
+    }
+
     public InputStream openAssetStream(String path) {
         try {
             return mContext.getAssets().open(path, AssetManager.ACCESS_STREAMING);
@@ -36,6 +44,8 @@ public class AndroidHostInterface {
     static public native String getScmVersion();
 
     static public native String getFullScmVersion();
+
+    static public native boolean setThreadAffinity(int[] cpus);
 
     static public native AndroidHostInterface create(Context context, String userDirectory);
 

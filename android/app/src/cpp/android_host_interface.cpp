@@ -22,6 +22,8 @@
 #include "scmversion/scmversion.h"
 #include <android/native_window_jni.h>
 #include <cmath>
+#include <unistd.h>
+#include <sched.h>
 #include <imgui.h>
 Log_SetChannel(AndroidHostInterface);
 
@@ -34,10 +36,11 @@ static jclass s_String_class;
 static jclass s_AndroidHostInterface_class;
 static jmethodID s_AndroidHostInterface_constructor;
 static jfieldID s_AndroidHostInterface_field_mNativePointer;
+static jmethodID s_AndroidHostInterface_method_reportError;
+static jmethodID s_AndroidHostInterface_method_reportMessage;
 static jmethodID s_AndroidHostInterface_method_openAssetStream;
 static jclass s_EmulationActivity_class;
 static jmethodID s_EmulationActivity_method_reportError;
-static jmethodID s_EmulationActivity_method_reportMessage;
 static jmethodID s_EmulationActivity_method_onEmulationStarted;
 static jmethodID s_EmulationActivity_method_onEmulationStopped;
 static jmethodID s_EmulationActivity_method_onGameTitleChanged;
@@ -161,25 +164,29 @@ void AndroidHostInterface::ReportError(const char* message)
 {
   CommonHostInterface::ReportError(message);
 
+  JNIEnv* env = AndroidHelpers::GetJNIEnv();
+  jstring message_jstr = env->NewStringUTF(message);
   if (m_emulation_activity_object)
-  {
-    JNIEnv* env = AndroidHelpers::GetJNIEnv();
-    jstring message_jstr = env->NewStringUTF(message);
     env->CallVoidMethod(m_emulation_activity_object, s_EmulationActivity_method_reportError, message_jstr);
-    env->DeleteLocalRef(message_jstr);
-  }
+  else
+    env->CallVoidMethod(m_java_object, s_AndroidHostInterface_method_reportError, message_jstr);
+  env->DeleteLocalRef(message_jstr);
 }
 
 void AndroidHostInterface::ReportMessage(const char* message)
 {
   CommonHostInterface::ReportMessage(message);
 
-  JNIEnv* env = AndroidHelpers::GetJNIEnv();
-  if (m_emulation_activity_object)
+  if (IsOnEmulationThread())
   {
-    jstring message_jstr = env->NewStringUTF(message);
-    env->CallVoidMethod(m_emulation_activity_object, s_EmulationActivity_method_reportMessage, message_jstr);
-    env->DeleteLocalRef(message_jstr);
+    // The toasts are not visible when the emulation activity is running anyway.
+    AddOSDMessage(message, 5.0f);
+  }
+  else
+  {
+    JNIEnv* env = AndroidHelpers::GetJNIEnv();
+    LocalRefHolder<jstring> message_jstr(env, env->NewStringUTF(message));
+    env->CallVoidMethod(m_java_object, s_AndroidHostInterface_method_reportMessage, message_jstr.Get());
   }
 }
 
@@ -309,6 +316,11 @@ void AndroidHostInterface::StopEmulationThreadLoop()
   m_sleep_cv.notify_one();
 }
 
+bool AndroidHostInterface::IsOnEmulationThread() const
+{
+  return std::this_thread::get_id() == m_emulation_thread_id;
+}
+
 void AndroidHostInterface::RunOnEmulationThread(std::function<void()> function, bool blocking)
 {
   if (!IsEmulationThreadRunning())
@@ -350,6 +362,7 @@ void AndroidHostInterface::EmulationThreadEntryPoint(JNIEnv* env, jobject emulat
 
   CreateImGuiContext();
   m_emulation_activity_object = emulation_activity;
+  m_emulation_thread_id = std::this_thread::get_id();
   ApplySettings(true);
 
   // Boot system.
@@ -439,7 +452,10 @@ void AndroidHostInterface::EmulationThreadLoop(JNIEnv* env)
     // simulate the system if not paused
     if (System::IsRunning())
     {
-      System::RunFrame();
+      if (m_throttler_enabled)
+        System::RunFrames();
+      else
+        System::RunFrame();
 
       if (m_vibration_enabled)
         UpdateVibration();
@@ -887,14 +903,16 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* reserved)
          env->GetMethodID(s_AndroidHostInterface_class, "<init>", "(Landroid/content/Context;)V")) == nullptr ||
       (s_AndroidHostInterface_field_mNativePointer =
          env->GetFieldID(s_AndroidHostInterface_class, "mNativePointer", "J")) == nullptr ||
+      (s_AndroidHostInterface_method_reportError =
+         env->GetMethodID(s_AndroidHostInterface_class, "reportError", "(Ljava/lang/String;)V")) == nullptr ||
+      (s_AndroidHostInterface_method_reportMessage =
+         env->GetMethodID(s_AndroidHostInterface_class, "reportMessage", "(Ljava/lang/String;)V")) == nullptr ||
       (s_AndroidHostInterface_method_openAssetStream = env->GetMethodID(
          s_AndroidHostInterface_class, "openAssetStream", "(Ljava/lang/String;)Ljava/io/InputStream;")) == nullptr ||
       (emulation_activity_class = env->FindClass("com/github/stenzek/duckstation/EmulationActivity")) == nullptr ||
       (s_EmulationActivity_class = static_cast<jclass>(env->NewGlobalRef(emulation_activity_class))) == nullptr ||
       (s_EmulationActivity_method_reportError =
          env->GetMethodID(s_EmulationActivity_class, "reportError", "(Ljava/lang/String;)V")) == nullptr ||
-      (s_EmulationActivity_method_reportMessage =
-         env->GetMethodID(s_EmulationActivity_class, "reportMessage", "(Ljava/lang/String;)V")) == nullptr ||
       (s_EmulationActivity_method_onEmulationStarted =
          env->GetMethodID(s_EmulationActivity_class, "onEmulationStarted", "()V")) == nullptr ||
       (s_EmulationActivity_method_onEmulationStopped =
@@ -938,6 +956,31 @@ DEFINE_JNI_ARGS_METHOD(jstring, AndroidHostInterface_getFullScmVersion, jobject 
   return env->NewStringUTF(SmallString::FromFormat("DuckStation for Android %s (%s)\nBuilt %s %s", g_scm_tag_str,
                                                    g_scm_branch_str, __DATE__, __TIME__));
 }
+
+DEFINE_JNI_ARGS_METHOD(void, AndroidHostInterface_setThreadAffinity, jobject unused, jintArray cores)
+{
+  // https://github.com/googlearchive/android-audio-high-performance/blob/c232c21bf35d3bfea16537b781c526b8abdcc3cf/SimpleSynth/app/src/main/cpp/audio_player.cc
+  int length = env->GetArrayLength(cores);
+  int* p_cores = env->GetIntArrayElements(cores, nullptr);
+
+  pid_t current_thread_id = gettid();
+  cpu_set_t cpu_set;
+  CPU_ZERO(&cpu_set);
+  for (int i = 0; i < length; i++)
+  {
+    Log_InfoPrintf("Binding to CPU %d", p_cores[i]);
+    CPU_SET(p_cores[i], &cpu_set);
+  }
+
+  int result = sched_setaffinity(current_thread_id, sizeof(cpu_set_t), &cpu_set);
+  if (result != 0)
+    Log_InfoPrintf("Thread affinity set.");
+  else
+    Log_ErrorPrintf("Error setting thread affinity: %d", result);
+
+  env->ReleaseIntArrayElements(cores, p_cores, 0);
+}
+
 
 DEFINE_JNI_ARGS_METHOD(jobject, AndroidHostInterface_create, jobject unused, jobject context_object,
                        jstring user_directory)
@@ -1001,10 +1044,12 @@ DEFINE_JNI_ARGS_METHOD(void, AndroidHostInterface_surfaceChanged, jobject obj, j
   if (surface && !native_surface)
     Log_ErrorPrint("ANativeWindow_fromSurface() returned null");
 
+  // We should wait for the emu to finish if the surface is being destroyed or changed.
   AndroidHostInterface* hi = AndroidHelpers::GetNativeClass(env, obj);
+  const bool block = (!native_surface || native_surface != hi->GetSurface());
   hi->RunOnEmulationThread(
     [hi, native_surface, format, width, height]() { hi->SurfaceChanged(native_surface, format, width, height); },
-    false);
+    block);
 }
 
 DEFINE_JNI_ARGS_METHOD(void, AndroidHostInterface_setControllerType, jobject obj, jint index, jstring controller_type)
