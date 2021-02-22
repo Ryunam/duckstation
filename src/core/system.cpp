@@ -1299,7 +1299,31 @@ void Throttle()
   else if (sleep_time >= MINIMUM_SLEEP_TIME)
   {
 #ifdef WIN32
-    Sleep(static_cast<u32>(sleep_time / 1000000));
+    static HANDLE throttle_timer;
+    static bool throttle_timer_created = false;
+    if (!throttle_timer_created)
+    {
+      throttle_timer_created = true;
+      throttle_timer = CreateWaitableTimer(nullptr, TRUE, nullptr);
+      if (throttle_timer)
+        std::atexit([]() { CloseHandle(throttle_timer); });
+      else
+        Log_ErrorPrintf("CreateWaitableTimer() failed, falling back to Sleep()");
+    }
+
+    if (throttle_timer)
+    {
+      LARGE_INTEGER due_time;
+      due_time.QuadPart = -static_cast<s64>(static_cast<u64>(sleep_time) / 100u);
+      if (SetWaitableTimer(throttle_timer, &due_time, 0, nullptr, nullptr, FALSE))
+        WaitForSingleObject(throttle_timer, INFINITE);
+      else
+        Log_ErrorPrintf("SetWaitableTimer() failed: %08X", GetLastError());
+    }
+    else
+    {
+      Sleep(static_cast<u32>(sleep_time / 1000000));
+    }
 #else
     const struct timespec ts = {0, static_cast<long>(sleep_time)};
     nanosleep(&ts, nullptr);
@@ -1635,11 +1659,30 @@ void UpdateMemoryCards()
 
 bool DumpRAM(const char* filename)
 {
-  auto fp = FileSystem::OpenManagedCFile(filename, "wb");
-  if (!fp)
+  if (!IsValid())
     return false;
 
-  return std::fwrite(Bus::g_ram, Bus::RAM_SIZE, 1, fp.get()) == 1;
+  return FileSystem::WriteBinaryFile(filename, Bus::g_ram, Bus::RAM_SIZE);
+}
+
+bool DumpVRAM(const char* filename)
+{
+  if (!IsValid())
+    return false;
+
+  g_gpu->RestoreGraphicsAPIState();
+  const bool result = g_gpu->DumpVRAMToFile(filename);
+  g_gpu->ResetGraphicsAPIState();
+
+  return result;
+}
+
+bool DumpSPURAM(const char* filename)
+{
+  if (!IsValid())
+    return false;
+
+  return FileSystem::WriteBinaryFile(filename, g_spu.GetRAM().data(), SPU::RAM_SIZE);
 }
 
 bool HasMedia()
