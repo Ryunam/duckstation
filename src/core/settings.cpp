@@ -123,6 +123,11 @@ void Settings::Load(SettingsInterface& si)
   apply_game_settings = si.GetBoolValue("Main", "ApplyGameSettings", true);
   auto_load_cheats = si.GetBoolValue("Main", "AutoLoadCheats", false);
   disable_all_enhancements = si.GetBoolValue("Main", "DisableAllEnhancements", false);
+  rewind_enable = si.GetBoolValue("Main", "RewindEnable", false);
+  rewind_save_frequency = si.GetFloatValue("Main", "RewindFrequency", 10.0f);
+  rewind_save_slots = static_cast<u32>(si.GetIntValue("Main", "RewindSaveSlots", 10));
+  runahead_enable = si.GetBoolValue("Main", "RunaheadEnable", false);
+  runahead_frames = static_cast<u32>(si.GetIntValue("Main", "RunaheadFrames", 1));
 
   cpu_execution_mode =
     ParseCPUExecutionMode(
@@ -295,6 +300,11 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("Main", "ApplyGameSettings", apply_game_settings);
   si.SetBoolValue("Main", "AutoLoadCheats", auto_load_cheats);
   si.SetBoolValue("Main", "DisableAllEnhancements", disable_all_enhancements);
+  si.SetBoolValue("Main", "RewindEnable", rewind_enable);
+  si.SetFloatValue("Main", "RewindFrequency", rewind_save_frequency);
+  si.SetIntValue("Main", "RewindSaveSlots", rewind_save_slots);
+  si.SetBoolValue("Main", "RunaheadEnable", runahead_enable);
+  si.SetFloatValue("Main", "RunaheadFrames", runahead_frames);
 
   si.SetStringValue("CPU", "ExecutionMode", GetCPUExecutionModeName(cpu_execution_mode));
   si.SetBoolValue("CPU", "OverclockEnable", cpu_overclock_enable);

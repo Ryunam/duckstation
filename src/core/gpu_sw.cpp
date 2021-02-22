@@ -75,11 +75,17 @@ bool GPU_SW::Initialize(HostDisplay* host_display)
   return true;
 }
 
-void GPU_SW::Reset()
+bool GPU_SW::DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display)
 {
-  GPU::Reset();
+  // ignore the host texture for software mode, since we want to save vram here
+  return GPU::DoState(sw, nullptr, update_display);
+}
 
-  m_backend.Reset();
+void GPU_SW::Reset(bool clear_vram)
+{
+  GPU::Reset(clear_vram);
+
+  m_backend.Reset(clear_vram);
 }
 
 void GPU_SW::UpdateSettings()

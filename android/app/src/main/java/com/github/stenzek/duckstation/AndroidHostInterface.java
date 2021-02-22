@@ -25,14 +25,6 @@ public class AndroidHostInterface {
         this.mContext = context;
     }
 
-    public void reportError(String message) {
-        Toast.makeText(mContext, message, Toast.LENGTH_LONG).show();
-    }
-
-    public void reportMessage(String message) {
-        Toast.makeText(mContext, message, Toast.LENGTH_SHORT).show();
-    }
-
     public InputStream openAssetStream(String path) {
         try {
             return mContext.getAssets().open(path, AssetManager.ACCESS_STREAMING);
@@ -131,6 +123,8 @@ public class AndroidHostInterface {
     public native int getMediaPlaylistIndex();
 
     public native boolean setMediaPlaylistIndex(int index);
+
+    public native boolean setMediaFilename(String filename);
 
     static {
         System.loadLibrary("duckstation-native");

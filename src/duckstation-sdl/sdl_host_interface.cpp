@@ -170,8 +170,8 @@ bool SDLHostInterface::CreateDisplay()
     return false;
   }
 
-  m_app_icon_texture =
-    display->CreateTexture(APP_ICON_WIDTH, APP_ICON_HEIGHT, APP_ICON_DATA, APP_ICON_WIDTH * sizeof(u32));
+  m_app_icon_texture = display->CreateTexture(APP_ICON_WIDTH, APP_ICON_HEIGHT, 1, 1, 1, HostDisplayPixelFormat::RGBA8,
+                                              APP_ICON_DATA, APP_ICON_WIDTH * sizeof(u32));
   if (!m_app_icon_texture)
     return false;
 
@@ -1806,7 +1806,7 @@ void SDLHostInterface::DoStartDisc()
   Assert(System::IsShutdown());
 
   nfdchar_t* path = nullptr;
-  if (!NFD_OpenDialog("bin,img,iso,cue,chd,exe,psexe,psf", nullptr, &path) || !path || std::strlen(path) == 0)
+  if (!NFD_OpenDialog("bin,img,iso,cue,chd,exe,psexe,psf,minipsf", nullptr, &path) || !path || std::strlen(path) == 0)
     return;
 
   AddFormattedOSDMessage(2.0f, "Starting disc from '%s'...", path);

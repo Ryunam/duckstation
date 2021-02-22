@@ -77,6 +77,8 @@ std::string GetGameCodeForPath(const char* image_path);
 DiscRegion GetRegionForCode(std::string_view code);
 DiscRegion GetRegionFromSystemArea(CDImage* cdi);
 DiscRegion GetRegionForImage(CDImage* cdi);
+DiscRegion GetRegionForExe(const char* path);
+DiscRegion GetRegionForPsf(const char* path);
 std::optional<DiscRegion> GetRegionForPath(const char* image_path);
 std::string_view GetTitleForPath(const char* path);
 
@@ -118,6 +120,10 @@ ALWAYS_INLINE_RELEASE TickCount UnscaleTicksToOverclock(TickCount ticks, TickCou
 
 TickCount GetMaxSliceTicks();
 void UpdateOverclock();
+
+/// Injects a PS-EXE into memory at its specified load location. If patch_loader is set, the BIOS will be patched to
+/// direct execution to this executable.
+bool InjectEXEFromBuffer(const void* buffer, u32 buffer_size, bool patch_loader = true);
 
 u32 GetFrameNumber();
 u32 GetInternalFrameNumber();
@@ -221,5 +227,15 @@ void ApplyCheatCode(const CheatCode& code);
 
 /// Sets or clears the provided cheat list, applying every frame.
 void SetCheatList(std::unique_ptr<CheatList> cheats);
+
+//////////////////////////////////////////////////////////////////////////
+// Memory Save States (Rewind and Runahead)
+//////////////////////////////////////////////////////////////////////////
+void CalculateRewindMemoryUsage(u32 num_saves, u64* ram_usage, u64* vram_usage);
+void ClearMemorySaveStates();
+void UpdateMemorySaveStateSettings();
+bool LoadRewindState(u32 skip_saves = 0, bool consume_state = true);
+void SetRewinding(bool enabled);
+void SetRunaheadReplayFlag();
 
 } // namespace System

@@ -9,6 +9,7 @@
 #include "common/string_util.h"
 #include "core/bios.h"
 #include "core/host_interface.h"
+#include "core/psf_loader.h"
 #include "core/settings.h"
 #include "core/system.h"
 #include <algorithm>
@@ -25,7 +26,8 @@ GameList::~GameList() = default;
 
 const char* GameList::EntryTypeToString(GameListEntryType type)
 {
-  static std::array<const char*, 3> names = {{"Disc", "PSExe", "Playlist"}};
+  static std::array<const char*, static_cast<int>(GameListEntryType::Count)> names = {
+    {"Disc", "PSExe", "Playlist", "PSF"}};
   return names[static_cast<int>(type)];
 }
 
@@ -48,16 +50,6 @@ const char* GameList::GetGameListCompatibilityRatingString(GameListCompatibility
   return (rating >= GameListCompatibilityRating::Unknown && rating < GameListCompatibilityRating::Count) ?
            names[static_cast<int>(rating)] :
            "";
-}
-
-static std::string_view GetFileNameFromPath(const char* path)
-{
-  const char* filename_end = path + std::strlen(path);
-  const char* filename_start = std::max(std::strrchr(path, '/'), std::strrchr(path, '\\'));
-  if (!filename_start)
-    return std::string_view(path, filename_end - path);
-  else
-    return std::string_view(filename_start + 1, filename_end - filename_start);
 }
 
 bool GameList::GetExeListEntry(const char* path, GameListEntry* entry)
@@ -94,15 +86,52 @@ bool GameList::GetExeListEntry(const char* path, GameListEntry* entry)
     return false;
 
   entry->code.clear();
-  entry->title = GetFileNameFromPath(path);
-
-  // no way to detect region...
+  entry->title = FileSystem::GetFileTitleFromPath(path);
   entry->path = path;
-  entry->region = DiscRegion::Other;
+  entry->region = BIOS::GetPSExeDiscRegion(header);
   entry->total_size = ZeroExtend64(file_size);
   entry->last_modified_time = ffd.ModificationTime.AsUnixTimestamp();
   entry->type = GameListEntryType::PSExe;
   entry->compatibility_rating = GameListCompatibilityRating::Unknown;
+
+  return true;
+}
+
+bool GameList::GetPsfListEntry(const char* path, GameListEntry* entry)
+{
+  FILESYSTEM_STAT_DATA ffd;
+  if (!FileSystem::StatFile(path, &ffd))
+    return false;
+
+  PSFLoader::File file;
+  if (!file.Load(path))
+    return false;
+
+  entry->code.clear();
+  entry->path = path;
+  entry->region = file.GetRegion();
+  entry->total_size = ffd.Size;
+  entry->last_modified_time = ffd.ModificationTime.AsUnixTimestamp();
+  entry->type = GameListEntryType::PSF;
+  entry->compatibility_rating = GameListCompatibilityRating::Unknown;
+
+  // Game - Title
+  std::optional<std::string> game(file.GetTagString("game"));
+  if (game.has_value())
+  {
+    entry->title = std::move(game.value());
+    entry->title += " - ";
+  }
+  else
+  {
+    entry->title.clear();
+  }
+
+  std::optional<std::string> title(file.GetTagString("title"));
+  if (title.has_value())
+    entry->title += title.value();
+  else
+    entry->title += FileSystem::GetFileTitleFromPath(path);
 
   return true;
 }
@@ -158,6 +187,8 @@ bool GameList::GetGameListEntry(const std::string& path, GameListEntry* entry)
 {
   if (System::IsExeFileName(path.c_str()))
     return GetExeListEntry(path.c_str(), entry);
+  if (System::IsPsfFileName(path.c_str()))
+    return GetPsfListEntry(path.c_str(), entry);
   if (System::IsM3UFileName(path.c_str()))
     return GetM3UListEntry(path.c_str(), entry);
 
@@ -325,7 +356,7 @@ bool GameList::LoadEntriesFromCache(ByteStream* stream)
     if (!ReadString(stream, &path) || !ReadString(stream, &code) || !ReadString(stream, &title) ||
         !ReadU64(stream, &total_size) || !ReadU64(stream, &last_modified_time) || !ReadU8(stream, &region) ||
         region >= static_cast<u8>(DiscRegion::Count) || !ReadU8(stream, &type) ||
-        type > static_cast<u8>(GameListEntryType::Playlist) || !ReadU8(stream, &compatibility_rating) ||
+        type >= static_cast<u8>(GameListEntryType::Count) || !ReadU8(stream, &compatibility_rating) ||
         compatibility_rating >= static_cast<u8>(GameListCompatibilityRating::Count))
     {
       Log_WarningPrintf("Game list cache entry is corrupted");
@@ -467,6 +498,8 @@ void GameList::ScanDirectory(const char* path, bool recursive, ProgressCallback*
 
   for (const FILESYSTEM_FIND_DATA& ffd : files)
   {
+    progress->IncrementProgressValue();
+
     // if this is a .bin, check if we have a .cue. if there is one, skip it
     const char* extension = std::strrchr(ffd.FileName.c_str(), '.');
     if (extension && StringUtil::Strcasecmp(extension, ".bin") == 0)
@@ -501,7 +534,6 @@ void GameList::ScanDirectory(const char* path, bool recursive, ProgressCallback*
         std::max(std::strrchr(entry_path.c_str(), '/'), std::strrchr(entry_path.c_str(), '\\'));
       progress->SetFormattedStatusText("Scanning '%s'...",
                                        file_part_slash ? (file_part_slash + 1) : entry_path.c_str());
-      progress->IncrementProgressValue();
 
       if (GetGameListEntry(entry_path, &entry))
       {
