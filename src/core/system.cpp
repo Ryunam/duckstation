@@ -39,12 +39,6 @@
 #include <limits>
 Log_SetChannel(System);
 
-#ifdef WIN32
-#include "common/windows_headers.h"
-#else
-#include <time.h>
-#endif
-
 SystemBootParameters::SystemBootParameters() = default;
 
 SystemBootParameters::SystemBootParameters(SystemBootParameters&& other) = default;
@@ -1391,35 +1385,10 @@ void Throttle()
   }
   else if (sleep_time >= MINIMUM_SLEEP_TIME)
   {
-#ifdef WIN32
-    static HANDLE throttle_timer;
-    static bool throttle_timer_created = false;
-    if (!throttle_timer_created)
-    {
-      throttle_timer_created = true;
-      throttle_timer = CreateWaitableTimer(nullptr, TRUE, nullptr);
-      if (throttle_timer)
-        std::atexit([]() { CloseHandle(throttle_timer); });
-      else
-        Log_ErrorPrintf("CreateWaitableTimer() failed, falling back to Sleep()");
-    }
-
-    if (throttle_timer)
-    {
-      LARGE_INTEGER due_time;
-      due_time.QuadPart = -static_cast<s64>(static_cast<u64>(sleep_time) / 100u);
-      if (SetWaitableTimer(throttle_timer, &due_time, 0, nullptr, nullptr, FALSE))
-        WaitForSingleObject(throttle_timer, INFINITE);
-      else
-        Log_ErrorPrintf("SetWaitableTimer() failed: %08X", GetLastError());
-    }
-    else
-    {
-      Sleep(static_cast<u32>(sleep_time / 1000000));
-    }
+#ifdef __ANDROID__
+    Common::Timer::HybridSleep(sleep_time);
 #else
-    const struct timespec ts = {0, static_cast<long>(sleep_time)};
-    nanosleep(&ts, nullptr);
+    Common::Timer::NanoSleep(sleep_time);
 #endif
   }
 
@@ -1973,7 +1942,7 @@ void CalculateRewindMemoryUsage(u32 num_saves, u64* ram_usage, u64* vram_usage)
 {
   *ram_usage = MAX_SAVE_STATE_SIZE * static_cast<u64>(num_saves);
   *vram_usage = (VRAM_WIDTH * VRAM_HEIGHT * 4) * static_cast<u64>(std::max(g_settings.gpu_resolution_scale, 1u)) *
-                static_cast<u64>(num_saves);
+                static_cast<u64>(g_settings.gpu_multisamples) * static_cast<u64>(num_saves);
 }
 
 void ClearMemorySaveStates()
@@ -2008,7 +1977,7 @@ void UpdateMemorySaveStateSettings()
   s_rewind_load_frequency = -1;
   s_rewind_load_counter = -1;
 
-  s_runahead_frames = g_settings.runahead_enable ? g_settings.runahead_frames : 0;
+  s_runahead_frames = g_settings.runahead_frames;
   s_runahead_replay_pending = false;
   if (s_runahead_frames > 0)
   {

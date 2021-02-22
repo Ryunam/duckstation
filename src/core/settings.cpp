@@ -126,8 +126,7 @@ void Settings::Load(SettingsInterface& si)
   rewind_enable = si.GetBoolValue("Main", "RewindEnable", false);
   rewind_save_frequency = si.GetFloatValue("Main", "RewindFrequency", 10.0f);
   rewind_save_slots = static_cast<u32>(si.GetIntValue("Main", "RewindSaveSlots", 10));
-  runahead_enable = si.GetBoolValue("Main", "RunaheadEnable", false);
-  runahead_frames = static_cast<u32>(si.GetIntValue("Main", "RunaheadFrames", 1));
+  runahead_frames = static_cast<u32>(si.GetIntValue("Main", "RunaheadFrameCount", 0));
 
   cpu_execution_mode =
     ParseCPUExecutionMode(
@@ -262,7 +261,7 @@ void Settings::Load(SettingsInterface& si)
   debugging.dump_cpu_to_vram_copies = si.GetBoolValue("Debug", "DumpCPUToVRAMCopies");
   debugging.dump_vram_to_cpu_copies = si.GetBoolValue("Debug", "DumpVRAMToCPUCopies");
   debugging.enable_gdb_server = si.GetBoolValue("Debug", "EnableGDBServer");
-  debugging.gdb_server_port = si.GetIntValue("Debug", "GDBServerPort");
+  debugging.gdb_server_port = static_cast<u16>(si.GetIntValue("Debug", "GDBServerPort"));
   debugging.show_gpu_state = si.GetBoolValue("Debug", "ShowGPUState");
   debugging.show_cdrom_state = si.GetBoolValue("Debug", "ShowCDROMState");
   debugging.show_spu_state = si.GetBoolValue("Debug", "ShowSPUState");
@@ -303,8 +302,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("Main", "RewindEnable", rewind_enable);
   si.SetFloatValue("Main", "RewindFrequency", rewind_save_frequency);
   si.SetIntValue("Main", "RewindSaveSlots", rewind_save_slots);
-  si.SetBoolValue("Main", "RunaheadEnable", runahead_enable);
-  si.SetFloatValue("Main", "RunaheadFrames", runahead_frames);
+  si.SetIntValue("Main", "RunaheadFrameCount", runahead_frames);
 
   si.SetStringValue("CPU", "ExecutionMode", GetCPUExecutionModeName(cpu_execution_mode));
   si.SetBoolValue("CPU", "OverclockEnable", cpu_overclock_enable);
