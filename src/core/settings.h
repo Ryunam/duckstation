@@ -81,6 +81,8 @@ struct Settings
 
   float emulation_speed = 1.0f;
   float fast_forward_speed = 0.0f;
+  float turbo_speed = 0.0f;
+  bool sync_to_host_refresh_rate = true;
   bool increase_timer_resolution = true;
   bool start_paused = false;
   bool start_fullscreen = false;
@@ -146,6 +148,7 @@ struct Settings
   s32 audio_output_volume = 100;
   s32 audio_fast_forward_volume = 100;
   u32 audio_buffer_size = 2048;
+  bool audio_resampling = false;
   bool audio_output_muted = false;
   bool audio_sync_enabled = true;
   bool audio_dump_on_boot = true;

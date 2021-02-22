@@ -63,12 +63,13 @@ void HostInterface::CreateAudioStream()
 
   m_audio_stream = CreateAudioStream(g_settings.audio_backend);
 
-  if (!m_audio_stream || !m_audio_stream->Reconfigure(AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, g_settings.audio_buffer_size))
+  if (!m_audio_stream ||
+      !m_audio_stream->Reconfigure(AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, g_settings.audio_buffer_size))
   {
     ReportFormattedError("Failed to create or configure audio stream, falling back to null output.");
     m_audio_stream.reset();
     m_audio_stream = AudioStream::CreateNullAudioStream();
-    m_audio_stream->Reconfigure(AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, g_settings.audio_buffer_size);
+    m_audio_stream->Reconfigure(AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, g_settings.audio_buffer_size);
   }
 
   m_audio_stream->SetOutputVolume(GetAudioOutputVolume());
@@ -471,6 +472,8 @@ void HostInterface::SetDefaultSettings(SettingsInterface& si)
 
   si.SetFloatValue("Main", "EmulationSpeed", 1.0f);
   si.SetFloatValue("Main", "FastForwardSpeed", 0.0f);
+  si.SetFloatValue("Main", "TurboSpeed", 0.0f);
+  si.SetBoolValue("Main", "SyncToHostRefreshRate", true);
   si.SetBoolValue("Main", "IncreaseTimerResolution", true);
   si.SetBoolValue("Main", "StartPaused", false);
   si.SetBoolValue("Main", "StartFullscreen", false);
@@ -542,6 +545,7 @@ void HostInterface::SetDefaultSettings(SettingsInterface& si)
   si.SetIntValue("Audio", "OutputVolume", 100);
   si.SetIntValue("Audio", "FastForwardVolume", 100);
   si.SetIntValue("Audio", "BufferSize", DEFAULT_AUDIO_BUFFER_SIZE);
+  si.SetBoolValue("Audio", "Resampling", true);
   si.SetIntValue("Audio", "OutputMuted", false);
   si.SetBoolValue("Audio", "Sync", true);
   si.SetBoolValue("Audio", "DumpOnBoot", false);

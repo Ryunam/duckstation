@@ -111,6 +111,8 @@ void Settings::Load(SettingsInterface& si)
 
   emulation_speed = si.GetFloatValue("Main", "EmulationSpeed", 1.0f);
   fast_forward_speed = si.GetFloatValue("Main", "FastForwardSpeed", 0.0f);
+  turbo_speed = si.GetFloatValue("Main", "TurboSpeed", 0.0f);
+  sync_to_host_refresh_rate = si.GetBoolValue("Main", "SyncToHostRefreshRate", true);
   increase_timer_resolution = si.GetBoolValue("Main", "IncreaseTimerResolution", true);
   start_paused = si.GetBoolValue("Main", "StartPaused", false);
   start_fullscreen = si.GetBoolValue("Main", "StartFullscreen", false);
@@ -206,6 +208,7 @@ void Settings::Load(SettingsInterface& si)
   audio_output_volume = si.GetIntValue("Audio", "OutputVolume", 100);
   audio_fast_forward_volume = si.GetIntValue("Audio", "FastForwardVolume", 100);
   audio_buffer_size = si.GetIntValue("Audio", "BufferSize", HostInterface::DEFAULT_AUDIO_BUFFER_SIZE);
+  audio_resampling = si.GetBoolValue("Audio", "Resampling", true);
   audio_output_muted = si.GetBoolValue("Audio", "OutputMuted", false);
   audio_sync_enabled = si.GetBoolValue("Audio", "Sync", true);
   audio_dump_on_boot = si.GetBoolValue("Audio", "DumpOnBoot", false);
@@ -280,6 +283,8 @@ void Settings::Save(SettingsInterface& si) const
 
   si.SetFloatValue("Main", "EmulationSpeed", emulation_speed);
   si.SetFloatValue("Main", "FastForwardSpeed", fast_forward_speed);
+  si.SetFloatValue("Main", "TurboSpeed", turbo_speed);
+  si.SetBoolValue("Main", "SyncToHostRefreshRate", sync_to_host_refresh_rate);
   si.SetBoolValue("Main", "IncreaseTimerResolution", increase_timer_resolution);
   si.SetBoolValue("Main", "StartPaused", start_paused);
   si.SetBoolValue("Main", "StartFullscreen", start_fullscreen);
@@ -357,6 +362,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetIntValue("Audio", "OutputVolume", audio_output_volume);
   si.SetIntValue("Audio", "FastForwardVolume", audio_fast_forward_volume);
   si.SetIntValue("Audio", "BufferSize", audio_buffer_size);
+  si.SetBoolValue("Audio", "Resampling", audio_resampling);
   si.SetBoolValue("Audio", "OutputMuted", audio_output_muted);
   si.SetBoolValue("Audio", "Sync", audio_sync_enabled);
   si.SetBoolValue("Audio", "DumpOnBoot", audio_dump_on_boot);
