@@ -489,7 +489,7 @@ void LibretroHostInterface::OnSystemDestroyed()
   m_using_hardware_renderer = false;
 }
 
-static std::array<retro_core_option_definition, 52> s_option_definitions = {{
+static std::array<retro_core_option_definition, 53> s_option_definitions = {{
   {"duckstation_Console.Region",
    "Console Region",
    "Determines which region/hardware to emulate. Auto-Detect will use the region of the disc inserted.",
@@ -887,9 +887,24 @@ static std::array<retro_core_option_definition, 52> s_option_definitions = {{
      {"6.0", "6.0 pixels"},   {"6.5", "6.5 pixels"}, {"7.0", "7.0 pixels"}, {"7.5", "7.5 pixels"},
      {"8.0", "8.0 pixels"},   {"8.5", "8.5 pixels"}, {"9.0", "9.0 pixels"}, {"9.5", "9.0 pixels"},
      {"10.0", "10.0 pixels"},
-
    },
    "-1.0"},
+  {"duckstation_Main.RunaheadFrameCount",
+   "Internal Run-Ahead",
+   "Simulates the system ahead of time and rolls back/replays to reduce input lag. Has very high system "
+   "requirements and forces CPU Execution Mode to Interpreter.",
+   {{"0", "0 Frames (Disabled)"},
+    {"1", "1 Frame"},
+    {"2", "2 Frames"},
+    {"3", "3 Frames"},
+    {"4", "4 Frames"},
+    {"5", "5 Frames"},
+    {"6", "6 Frames"},
+    {"7", "7 Frames"},
+    {"8", "8 Frames"},
+    {"9", "9 Frames"},
+    {"10", "10 Frames"}},
+   "0"},
   {},
 }};
 
