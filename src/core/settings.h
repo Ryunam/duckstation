@@ -81,6 +81,8 @@ struct Settings
 
   float emulation_speed = 1.0f;
   float fast_forward_speed = 0.0f;
+  float turbo_speed = 0.0f;
+  bool sync_to_host_refresh_rate = true;
   bool increase_timer_resolution = true;
   bool start_paused = false;
   bool start_fullscreen = false;
@@ -91,6 +93,11 @@ struct Settings
   bool apply_game_settings = true;
   bool auto_load_cheats = false;
   bool disable_all_enhancements = false;
+
+  bool rewind_enable = false;
+  float rewind_save_frequency = 10.0f;
+  u32 rewind_save_slots = 10;
+  u32 runahead_frames = 0;
 
   GPURenderer gpu_renderer = GPURenderer::Software;
   std::string gpu_adapter;
@@ -131,6 +138,7 @@ struct Settings
   bool display_show_vps = false;
   bool display_show_speed = false;
   bool display_show_resolution = false;
+  bool display_all_frames = false;
   bool video_sync_enabled = true;
   float display_max_fps = 0.0f;
   float gpu_pgxp_tolerance = -1.0f;
@@ -146,6 +154,7 @@ struct Settings
   s32 audio_output_volume = 100;
   s32 audio_fast_forward_volume = 100;
   u32 audio_buffer_size = 2048;
+  bool audio_resampling = false;
   bool audio_output_muted = false;
   bool audio_sync_enabled = true;
   bool audio_dump_on_boot = true;
@@ -215,6 +224,7 @@ struct Settings
   ALWAYS_INLINE bool IsUsingCodeCache() const { return (cpu_execution_mode != CPUExecutionMode::Interpreter); }
   ALWAYS_INLINE bool IsUsingRecompiler() const { return (cpu_execution_mode == CPUExecutionMode::Recompiler); }
   ALWAYS_INLINE bool IsUsingSoftwareRenderer() const { return (gpu_renderer == GPURenderer::Software); }
+  ALWAYS_INLINE bool IsRunaheadEnabled() const { return (runahead_frames > 0); }
 
   ALWAYS_INLINE PGXPMode GetPGXPMode()
   {

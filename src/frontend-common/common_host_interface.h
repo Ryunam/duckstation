@@ -183,8 +183,8 @@ public:
   /// Parses a fullscreen mode into its components (width * height @ refresh hz)
   static bool ParseFullscreenMode(const std::string_view& mode, u32* width, u32* height, float* refresh_rate);
 
-  /// Returns true if fast forwarding is currently active.
-  bool IsFastForwardEnabled() const { return m_fast_forward_enabled; }
+  /// Returns true if fast forwarding or slow motion is currently active.
+  bool IsRunningAtNonStandardSpeed() const;
 
   /// Requests the specified size for the render window. Not guaranteed to succeed (e.g. if in fullscreen).
   virtual bool RequestRenderWindowSize(s32 new_window_width, s32 new_window_height);
@@ -224,6 +224,9 @@ protected:
 
   /// Request the frontend to exit.
   virtual void RequestExit() = 0;
+
+  /// Registers frontend-specific hotkeys.
+  virtual void RegisterHotkeys();
 
   /// Executes per-frame tasks such as controller polling.
   virtual void PollAndUpdate();
@@ -349,8 +352,10 @@ protected:
 
   bool m_frame_step_request = false;
   bool m_fast_forward_enabled = false;
+  bool m_turbo_enabled = false;
   bool m_timer_resolution_increased = false;
-  bool m_speed_limiter_enabled = true;
+  bool m_throttler_enabled = true;
+  bool m_display_all_frames = true;
 
 private:
   void InitializeUserDirectory();
@@ -392,6 +397,7 @@ private:
     u32 num_motors;
     std::array<float, MAX_MOTORS> last_strength;
     ControllerRumbleCallback update_callback;
+    u64 last_update_time;
   };
   std::vector<ControllerRumbleState> m_controller_vibration_motors;
 

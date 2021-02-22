@@ -339,7 +339,7 @@ void QtHostInterface::refreshGameList(bool invalidate_cache /* = false */, bool 
   std::lock_guard<std::recursive_mutex> lock(m_settings_mutex);
   m_game_list->SetSearchDirectoriesFromSettings(*m_settings_interface.get());
 
-  QtProgressCallback progress(m_main_window);
+  QtProgressCallback progress(m_main_window, invalidate_cache ? 0.0f : 1.0f);
   m_game_list->Refresh(invalidate_cache, invalidate_database, &progress);
   emit gameListRefreshed();
 }
@@ -1226,11 +1226,11 @@ void QtHostInterface::setAudioOutputVolume(int volume, int fast_forward_volume)
     return;
   }
 
-  if (m_audio_stream)
-    m_audio_stream->SetOutputVolume(m_speed_limiter_enabled ? volume : fast_forward_volume);
-
   g_settings.audio_output_volume = volume;
   g_settings.audio_fast_forward_volume = fast_forward_volume;
+
+  if (m_audio_stream)
+    m_audio_stream->SetOutputVolume(GetAudioOutputVolume());
 }
 
 void QtHostInterface::setAudioOutputMuted(bool muted)
@@ -1292,14 +1292,41 @@ void QtHostInterface::dumpRAM(const QString& filename)
     return;
   }
 
-  if (System::IsShutdown())
-    return;
-
   const std::string filename_str = filename.toStdString();
   if (System::DumpRAM(filename_str.c_str()))
     ReportFormattedMessage("RAM dumped to '%s'", filename_str.c_str());
   else
     ReportFormattedMessage("Failed to dump RAM to '%s'", filename_str.c_str());
+}
+
+void QtHostInterface::dumpVRAM(const QString& filename)
+{
+  if (!isOnWorkerThread())
+  {
+    QMetaObject::invokeMethod(this, "dumpVRAM", Qt::QueuedConnection, Q_ARG(const QString&, filename));
+    return;
+  }
+
+  const std::string filename_str = filename.toStdString();
+  if (System::DumpVRAM(filename_str.c_str()))
+    ReportFormattedMessage("VRAM dumped to '%s'", filename_str.c_str());
+  else
+    ReportFormattedMessage("Failed to dump VRAM to '%s'", filename_str.c_str());
+}
+
+void QtHostInterface::dumpSPURAM(const QString& filename)
+{
+  if (!isOnWorkerThread())
+  {
+    QMetaObject::invokeMethod(this, "dumpSPURAM", Qt::QueuedConnection, Q_ARG(const QString&, filename));
+    return;
+  }
+
+  const std::string filename_str = filename.toStdString();
+  if (System::DumpSPURAM(filename_str.c_str()))
+    ReportFormattedMessage("SPU RAM dumped to '%s'", filename_str.c_str());
+  else
+    ReportFormattedMessage("Failed to dump SPU RAM to '%s'", filename_str.c_str());
 }
 
 void QtHostInterface::saveScreenshot()
@@ -1388,7 +1415,11 @@ void QtHostInterface::threadEntryPoint()
       continue;
     }
 
-    System::RunFrame();
+    if (m_display_all_frames)
+      System::RunFrame();
+    else
+      System::RunFrames();
+
     UpdateControllerRumble();
     if (m_frame_step_request)
     {
@@ -1400,7 +1431,7 @@ void QtHostInterface::threadEntryPoint()
 
     System::UpdatePerformanceCounters();
 
-    if (m_speed_limiter_enabled)
+    if (m_throttler_enabled)
       System::Throttle();
 
     m_worker_thread_event_loop->processEvents(QEventLoop::AllEvents);

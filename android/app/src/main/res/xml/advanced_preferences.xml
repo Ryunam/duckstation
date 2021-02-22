@@ -29,6 +29,12 @@
         app:defaultValue="false"
         app:summary="@string/settings_summary_disable_all_enhancements"
         app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat
+        app:key="Main/SustainedPerformanceMode"
+        app:title="@string/settings_sustained_performance_mode"
+        app:defaultValue="false"
+        app:summary="@string/settings_summary_sustained_performance_mode"
+        app:iconSpaceReserved="false" />
     <ListPreference
         app:key="CPU/Overclock"
         app:title="@string/settings_cpu_overclocking"
@@ -87,6 +93,12 @@
         app:useSimpleSummaryProvider="true"
         app:defaultValue="MMap"
         app:summary="@string/settings_summary_cpu_recompiler_fastmem"
+        app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat
+        app:key="Display/DisplayAllFrames"
+        app:title="@string/settings_display_all_frames"
+        app:defaultValue="false"
+        app:summary="@string/settings_summary_display_all_frames"
         app:iconSpaceReserved="false" />
     <ListPreference
         app:key="Display/MaxFPS"

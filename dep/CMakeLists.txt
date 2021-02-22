@@ -19,6 +19,9 @@ if(NOT BUILD_LIBRETRO_CORE)
   add_subdirectory(tinyxml2)
 endif()
 
+set(LIBSAMPLERATE_ENABLE_SINC_BEST_CONVERTER OFF)
+add_subdirectory(libsamplerate)
+
 if(ENABLE_DISCORD_PRESENCE)
   add_subdirectory(discord-rpc)
 endif()

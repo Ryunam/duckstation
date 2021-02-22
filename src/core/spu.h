@@ -17,6 +17,12 @@ class TimingEvent;
 class SPU
 {
 public:
+  enum : u32
+  {
+    RAM_SIZE = 512 * 1024,
+    RAM_MASK = RAM_SIZE - 1,
+  };
+
   SPU();
   ~SPU();
 
@@ -47,9 +53,14 @@ public:
   /// Stops dumping audio to file, if started.
   bool StopDumpingAudio();
 
+  /// Access to SPU RAM.
+  const std::array<u8, RAM_SIZE>& GetRAM() const { return m_ram; }
+  std::array<u8, RAM_SIZE>& GetRAM() { return m_ram; }
+
+  /// Change output stream - used for runahead.
+  ALWAYS_INLINE void SetAudioStream(AudioStream* stream) { m_audio_stream = stream; }
+
 private:
-  static constexpr u32 RAM_SIZE = 512 * 1024;
-  static constexpr u32 RAM_MASK = RAM_SIZE - 1;
   static constexpr u32 SPU_BASE = 0x1F801C00;
   static constexpr u32 NUM_VOICES = 24;
   static constexpr u32 NUM_VOICE_REGISTERS = 8;
@@ -355,6 +366,8 @@ private:
   void Execute(TickCount ticks);
   void UpdateEventInterval();
 
+  void ExecuteFIFOWriteToRAM(TickCount& ticks);
+  void ExecuteFIFOReadFromRAM(TickCount& ticks);
   void ExecuteTransfer(TickCount ticks);
   void ManualTransferWrite(u16 value);
   void UpdateTransferEvent();
@@ -363,6 +376,7 @@ private:
   std::unique_ptr<TimingEvent> m_tick_event;
   std::unique_ptr<TimingEvent> m_transfer_event;
   std::unique_ptr<Common::WAVWriter> m_dump_writer;
+  AudioStream* m_audio_stream = nullptr;
   TickCount m_ticks_carry = 0;
   TickCount m_cpu_ticks_per_spu_tick = 0;
   TickCount m_cpu_tick_divider = 0;

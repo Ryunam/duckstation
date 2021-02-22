@@ -15,6 +15,7 @@
 class StateWrapper;
 
 class HostDisplay;
+class HostDisplayTexture;
 
 class TimingEvent;
 class Timers;
@@ -75,8 +76,8 @@ public:
   virtual bool IsHardwareRenderer() const = 0;
 
   virtual bool Initialize(HostDisplay* host_display);
-  virtual void Reset();
-  virtual bool DoState(StateWrapper& sw, bool update_display);
+  virtual void Reset(bool clear_vram);
+  virtual bool DoState(StateWrapper& sw, HostDisplayTexture** save_to_texture, bool update_display);
 
   // Graphics API state reset/restore - call when drawing the UI etc.
   virtual void ResetGraphicsAPIState();
@@ -159,6 +160,9 @@ public:
 
   // Returns the video clock frequency.
   TickCount GetCRTCFrequency() const;
+
+  // Dumps raw VRAM to a file.
+  bool DumpVRAMToFile(const char* filename);
 
 protected:
   TickCount CRTCTicksToSystemTicks(TickCount crtc_ticks, TickCount fractional_ticks) const;

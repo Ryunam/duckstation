@@ -147,8 +147,9 @@ bool LibretroHostDisplay::SetPostProcessingChain(const std::string_view& config)
   return false;
 }
 
-std::unique_ptr<HostDisplayTexture> LibretroHostDisplay::CreateTexture(u32 width, u32 height, const void* data,
-                                                                       u32 data_stride, bool dynamic)
+std::unique_ptr<HostDisplayTexture> LibretroHostDisplay::CreateTexture(u32 width, u32 height, u32 layers, u32 levels, u32 samples,
+                                                                      HostDisplayPixelFormat format, const void* data,
+                                                                      u32 data_stride, bool dynamic)
 {
   return nullptr;
 }

@@ -244,7 +244,14 @@ bool CDROM::DoState(StateWrapper& sw)
 
 bool CDROM::IsMediaPS1Disc() const
 {
-  return (m_disc_region != DiscRegion::Other);
+  if (!m_reader.HasMedia())
+    return false;
+
+  // Check for a data track as the first track.
+  if (m_reader.GetMedia()->GetTrackMode(1) == CDImage::TrackMode::Audio)
+    return false;
+
+  return true;
 }
 
 bool CDROM::DoesMediaRegionMatchConsole() const
@@ -346,8 +353,8 @@ u8 CDROM::ReadRegister(u32 offset)
     {
       if (m_response_fifo.IsEmpty())
       {
-        Log_DebugPrintf("Response FIFO empty on read");
-        return 0xFF;
+        Log_DevPrint("Response FIFO empty on read");
+        return 0x00;
       }
 
       const u8 value = m_response_fifo.Pop();
@@ -1034,10 +1041,11 @@ void CDROM::ExecuteCommand()
     {
       if (m_secondary_status.seeking)
       {
-        Log_WarningPrintf("CDROM Pause command while seeking - sending error response");
-        SendErrorResponse(STAT_ERROR, ERROR_REASON_NOT_READY);
-        EndCommand();
-        return;
+        // TODO: On console, this returns an error. But perhaps only during the coarse/fine seek part? Needs more
+        // hardware tests.
+        Log_WarningPrintf("CDROM Pause command while seeking - updating position");
+        UpdatePositionWhileSeeking();
+        m_drive_event->Deactivate();
       }
 
       // TODO: Should return an error if seeking.

@@ -93,6 +93,7 @@
         <item>16:9</item>
         <item>16:10</item>
         <item>19:9</item>
+        <item>20:9</item>
         <item>21:9</item>
         <item>32:9</item>
         <item>8:7</item>
@@ -108,6 +109,7 @@
         <item>16:9</item>
         <item>16:10</item>
         <item>19:9</item>
+        <item>20:9</item>
         <item>21:9</item>
         <item>32:9</item>
         <item>8:7</item>
@@ -432,6 +434,7 @@
         <item>Portuguese (pt) in Brazil (BR)</item>
         <item>Italian (it)</item>
         <item>Dutch (nl)</item>
+        <item>Spanish (es)</item>
     </string-array>
     <string-array name="settings_language_values">
         <item>none</item>
@@ -439,6 +442,7 @@
         <item>pt-rBR</item>
         <item>it-IT</item>
         <item>nl-NL</item>
+        <item>es-ES</item>
     </string-array>
     <string-array name="settings_theme_entries">
         <item>Follow System</item>

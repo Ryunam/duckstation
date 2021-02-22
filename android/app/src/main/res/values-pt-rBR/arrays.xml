@@ -49,6 +49,7 @@
         <item>16:9</item>
         <item>16:10</item>
         <item>19:9</item>
+        <item>20:9</item>
         <item>21:9</item>
         <item>32:9</item>
         <item>8:7</item>
@@ -231,4 +232,14 @@
         <item>Retrato</item>
         <item>Paisagem</item>
     </string-array>
-</resources>
+    <string-array name="settings_theme_entries">
+        <item>Padrão do Sistema</item>
+		<item>Claro</item>
+        <item>Escuro</item>
+	</string-array>
+	<string-array name="settings_downsample_mode_entries">
+        <item>Desabilitado</item>
+		<item>Misto (Reduz 3D / Suaviza Tudo)</item>
+        <item>Adaptativo (Preserva o 3D / Suaviza 2D)</item>
+	</string-array>
+	</resources>

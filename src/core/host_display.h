@@ -26,8 +26,10 @@ public:
   virtual void* GetHandle() const = 0;
   virtual u32 GetWidth() const = 0;
   virtual u32 GetHeight() const = 0;
-
-  ALWAYS_INLINE HostDisplayPixelFormat GetFormat() const { return HostDisplayPixelFormat::RGBA8; }
+  virtual u32 GetLayers() const = 0;
+  virtual u32 GetLevels() const = 0;
+  virtual u32 GetSamples() const = 0;
+  virtual HostDisplayPixelFormat GetFormat() const = 0;
 };
 
 // Interface to the frontend's renderer.
@@ -92,8 +94,9 @@ public:
   virtual void ResizeRenderWindow(s32 new_window_width, s32 new_window_height) = 0;
 
   /// Creates an abstracted RGBA8 texture. If dynamic, the texture can be updated with UpdateTexture() below.
-  virtual std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, const void* data, u32 data_stride,
-                                                            bool dynamic = false) = 0;
+  virtual std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, u32 layers, u32 levels, u32 samples,
+                                                            HostDisplayPixelFormat format, const void* data,
+                                                            u32 data_stride, bool dynamic = false) = 0;
   virtual void UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height, const void* data,
                              u32 data_stride) = 0;
 
@@ -169,6 +172,8 @@ public:
                                      u32* out_pitch) = 0;
   virtual void EndSetDisplayPixels() = 0;
   virtual bool SetDisplayPixels(HostDisplayPixelFormat format, u32 width, u32 height, const void* buffer, u32 pitch);
+
+  virtual bool GetHostRefreshRate(float* refresh_rate);
 
   void SetDisplayLinearFiltering(bool enabled) { m_display_linear_filtering = enabled; }
   void SetDisplayTopMargin(s32 height) { m_display_top_margin = height; }

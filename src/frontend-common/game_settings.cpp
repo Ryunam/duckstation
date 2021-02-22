@@ -107,7 +107,8 @@ bool Entry::LoadFromStream(ByteStream* stream)
   constexpr u32 num_bytes = (static_cast<u32>(Trait::Count) + 7) / 8;
   std::array<u8, num_bytes> bits;
 
-  if (!stream->Read2(bits.data(), num_bytes) || !ReadOptionalFromStream(stream, &cpu_overclock_numerator) ||
+  if (!stream->Read2(bits.data(), num_bytes) || !ReadOptionalFromStream(stream, &runahead_frames) ||
+      !ReadOptionalFromStream(stream, &cpu_overclock_numerator) ||
       !ReadOptionalFromStream(stream, &cpu_overclock_denominator) ||
       !ReadOptionalFromStream(stream, &cpu_overclock_enable) || !ReadOptionalFromStream(stream, &cdrom_read_speedup) ||
       !ReadOptionalFromStream(stream, &display_active_start_offset) ||
@@ -158,7 +159,8 @@ bool Entry::SaveToStream(ByteStream* stream) const
       bits[i / 8] |= (1u << (i % 8));
   }
 
-  return stream->Write2(bits.data(), num_bytes) && WriteOptionalToStream(stream, cpu_overclock_numerator) &&
+  return stream->Write2(bits.data(), num_bytes) && WriteOptionalToStream(stream, runahead_frames) &&
+         WriteOptionalToStream(stream, cpu_overclock_numerator) &&
          WriteOptionalToStream(stream, cpu_overclock_denominator) &&
          WriteOptionalToStream(stream, cpu_overclock_enable) && WriteOptionalToStream(stream, cdrom_read_speedup) &&
          WriteOptionalToStream(stream, display_active_start_offset) &&
@@ -193,7 +195,11 @@ static void ParseIniSection(Entry* entry, const char* section, const CSimpleIniA
       entry->AddTrait(static_cast<Trait>(trait));
   }
 
-  const char* cvalue = ini.GetValue(section, "CPUOverclockNumerator", nullptr);
+  const char* cvalue = ini.GetValue(section, "RunaheadFrameCount", nullptr);
+  if (cvalue)
+    entry->runahead_frames = StringUtil::FromChars<u32>(cvalue);
+
+  cvalue = ini.GetValue(section, "CPUOverclockNumerator", nullptr);
   if (cvalue)
     entry->cpu_overclock_numerator = StringUtil::FromChars<u32>(cvalue);
   cvalue = ini.GetValue(section, "CPUOverclockDenominator", nullptr);
@@ -272,7 +278,7 @@ static void ParseIniSection(Entry* entry, const char* section, const CSimpleIniA
   cvalue = ini.GetValue(section, "GPUScaledDithering", nullptr);
   if (cvalue)
     entry->gpu_scaled_dithering = StringUtil::FromChars<bool>(cvalue);
-  cvalue = ini.GetValue(section, "GPUBilinearTextureFiltering", nullptr);
+  cvalue = ini.GetValue(section, "GPUTextureFiltering", nullptr);
   if (cvalue)
     entry->gpu_texture_filter = Settings::ParseTextureFilterName(cvalue);
   cvalue = ini.GetValue(section, "GPUForceNTSCTimings", nullptr);
@@ -319,6 +325,9 @@ static void StoreIniSection(const Entry& entry, const char* section, CSimpleIniA
     if (entry.HasTrait(static_cast<Trait>(trait)))
       ini.SetBoolValue(section, s_trait_names[trait].first, true);
   }
+
+  if (entry.runahead_frames.has_value())
+    ini.SetLongValue(section, "RunaheadFrameCount", static_cast<long>(entry.runahead_frames.value()));
 
   if (entry.cpu_overclock_numerator.has_value())
     ini.SetLongValue(section, "CPUOverclockNumerator", static_cast<long>(entry.cpu_overclock_numerator.value()));
@@ -413,7 +422,14 @@ static void StoreIniSection(const Entry& entry, const char* section, CSimpleIniA
 
 static std::optional<std::string> GetEntryValueForKey(const Entry& entry, const std::string_view& key)
 {
-  if (key == "CPUOverclock")
+  if (key == "RunaheadFrameCount")
+  {
+    if (!entry.runahead_frames.has_value())
+      return std::nullopt;
+
+    return std::to_string(entry.runahead_frames.value());
+  }
+  else if (key == "CPUOverclock")
   {
     if (!entry.cpu_overclock_enable.has_value())
       return std::nullopt;
@@ -596,7 +612,14 @@ static std::optional<std::string> GetEntryValueForKey(const Entry& entry, const 
 
 static void SetEntryValueForKey(Entry& entry, const std::string_view& key, const std::optional<std::string>& value)
 {
-  if (key == "CPUOverclock")
+  if (key == "RunaheadFrameCount")
+  {
+    if (!value.has_value())
+      entry.runahead_frames.reset();
+    else
+      entry.runahead_frames = StringUtil::FromChars<u32>(value.value());
+  }
+  else if (key == "CPUOverclock")
   {
     if (!value.has_value())
     {
@@ -903,6 +926,8 @@ void Entry::ApplySettings(bool display_osd_messages) const
 {
   constexpr float osd_duration = 10.0f;
 
+  if (runahead_frames.has_value())
+    g_settings.runahead_frames = runahead_frames.value();
   if (cpu_overclock_numerator.has_value())
     g_settings.cpu_overclock_numerator = cpu_overclock_numerator.value();
   if (cpu_overclock_denominator.has_value())

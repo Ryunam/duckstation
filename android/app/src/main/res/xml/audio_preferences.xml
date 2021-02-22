@@ -27,7 +27,7 @@
         app:iconSpaceReserved="false"
         app:showSeekBarValue="true" />
     <SeekBarPreference
-        app:key="Audio/OutputVolume"
+        app:key="Audio/FastForwardVolume"
         app:title="@string/settings_fast_forward_volume"
         app:summary="@string/settings_summary_fast_forward_volume"
         app:defaultValue="100"
@@ -69,6 +69,12 @@
         app:title="@string/settings_audio_sync"
         app:defaultValue="true"
         app:summary="@string/settings_summary_audio_sync"
+        app:iconSpaceReserved="false" />
+    <SwitchPreferenceCompat
+        app:key="Audio/Resampling"
+        app:title="@string/settings_audio_resampling"
+        app:defaultValue="true"
+        app:summary="@string/settings_summary_audio_resampling"
         app:iconSpaceReserved="false" />
 
 </PreferenceScreen>

@@ -16,41 +16,25 @@ namespace FrontendCommon {
 class OpenGLHostDisplayTexture : public HostDisplayTexture
 {
 public:
-  OpenGLHostDisplayTexture(GLuint id, u32 width, u32 height) : m_id(id), m_width(width), m_height(height) {}
-  ~OpenGLHostDisplayTexture() override { glDeleteTextures(1, &m_id); }
-
-  void* GetHandle() const override { return reinterpret_cast<void*>(static_cast<uintptr_t>(m_id)); }
-  u32 GetWidth() const override { return m_width; }
-  u32 GetHeight() const override { return m_height; }
-
-  GLuint GetGLID() const { return m_id; }
-
-  static std::unique_ptr<OpenGLHostDisplayTexture> Create(u32 width, u32 height, const void* initial_data,
-                                                          u32 initial_data_stride)
+  OpenGLHostDisplayTexture(GL::Texture texture, HostDisplayPixelFormat format)
+    : m_texture(std::move(texture)), m_format(format)
   {
-    GLuint id;
-    glGenTextures(1, &id);
-
-    GLint old_texture_binding = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture_binding);
-
-    // TODO: Set pack width
-    Assert(!initial_data || initial_data_stride == (width * sizeof(u32)));
-
-    glBindTexture(GL_TEXTURE_2D, id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, initial_data);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    glBindTexture(GL_TEXTURE_2D, id);
-    return std::make_unique<OpenGLHostDisplayTexture>(id, width, height);
   }
+  ~OpenGLHostDisplayTexture() override = default;
+
+  void* GetHandle() const override { return reinterpret_cast<void*>(static_cast<uintptr_t>(m_texture.GetGLId())); }
+  u32 GetWidth() const override { return m_texture.GetWidth(); }
+  u32 GetHeight() const override { return m_texture.GetHeight(); }
+  u32 GetLayers() const override { return 1; }
+  u32 GetLevels() const override { return 1; }
+  u32 GetSamples() const override { return m_texture.GetSamples(); }
+  HostDisplayPixelFormat GetFormat() const override { return m_format; }
+
+  GLuint GetGLID() const { return m_texture.GetGLId(); }
 
 private:
-  GLuint m_id;
-  u32 m_width;
-  u32 m_height;
+  GL::Texture m_texture;
+  HostDisplayPixelFormat m_format;
 };
 
 OpenGLHostDisplay::OpenGLHostDisplay() = default;
@@ -75,20 +59,34 @@ void* OpenGLHostDisplay::GetRenderContext() const
   return m_gl_context.get();
 }
 
-std::unique_ptr<HostDisplayTexture> OpenGLHostDisplay::CreateTexture(u32 width, u32 height, const void* initial_data,
-                                                                     u32 initial_data_stride, bool dynamic)
-{
-  return OpenGLHostDisplayTexture::Create(width, height, initial_data, initial_data_stride);
-}
-
 static constexpr std::array<std::tuple<GLenum, GLenum, GLenum>, static_cast<u32>(HostDisplayPixelFormat::Count)>
   s_display_pixel_format_mapping = {{
     {},                                                  // Unknown
-    {GL_RGBA, GL_RGBA, GL_UNSIGNED_BYTE},                // RGBA8
-    {GL_BGRA, GL_BGRA, GL_UNSIGNED_BYTE},                // BGRA8
-    {GL_RGB, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},           // RGB565
+    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},                // RGBA8
+    {GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE},                // BGRA8
+    {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},           // RGB565
     {GL_RGB5_A1, GL_BGRA, GL_UNSIGNED_SHORT_1_5_5_5_REV} // RGBA5551
   }};
+
+std::unique_ptr<HostDisplayTexture> OpenGLHostDisplay::CreateTexture(u32 width, u32 height, u32 layers, u32 levels,
+                                                                     u32 samples, HostDisplayPixelFormat format,
+                                                                     const void* data, u32 data_stride,
+                                                                     bool dynamic /* = false */)
+{
+  if (layers != 1 || levels != 1)
+    return {};
+
+  const auto [gl_internal_format, gl_format, gl_type] = s_display_pixel_format_mapping[static_cast<u32>(format)];
+
+  // TODO: Set pack width
+  Assert(!data || data_stride == (width * sizeof(u32)));
+
+  GL::Texture tex;
+  if (!tex.Create(width, height, samples, gl_internal_format, gl_format, gl_type, data, data_stride))
+    return {};
+
+  return std::make_unique<OpenGLHostDisplayTexture>(std::move(tex), format);
+}
 
 void OpenGLHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
                                       const void* texture_data, u32 texture_data_stride)
@@ -106,17 +104,23 @@ void OpenGLHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y,
 
   GLint old_texture_binding = 0, old_alignment = 0, old_row_length = 0;
   glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture_binding);
-  glGetIntegerv(GL_UNPACK_ALIGNMENT, &old_alignment);
-  glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row_length);
-
   glBindTexture(GL_TEXTURE_2D, tex->GetGLID());
+
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &old_alignment);
   glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, texture_data_stride / GetDisplayPixelFormatSize(texture->GetFormat()));
+
+  if (!m_use_gles2_draw_path)
+  {
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row_length);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, texture_data_stride / GetDisplayPixelFormatSize(texture->GetFormat()));
+  }
 
   glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height, gl_format, gl_type, texture_data);
 
+  if (!m_use_gles2_draw_path)
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, old_row_length);
+
   glPixelStorei(GL_UNPACK_ALIGNMENT, old_alignment);
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, old_row_length);
   glBindTexture(GL_TEXTURE_2D, old_texture_binding);
 }
 
@@ -133,9 +137,12 @@ bool OpenGLHostDisplay::DownloadTexture(const void* texture_handle, HostDisplayP
 
   GLint old_alignment = 0, old_row_length = 0;
   glGetIntegerv(GL_PACK_ALIGNMENT, &old_alignment);
-  glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row_length);
   glPixelStorei(GL_PACK_ALIGNMENT, alignment);
-  glPixelStorei(GL_PACK_ROW_LENGTH, out_data_stride / GetDisplayPixelFormatSize(texture_format));
+  if (!m_use_gles2_draw_path)
+  {
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row_length);
+    glPixelStorei(GL_PACK_ROW_LENGTH, out_data_stride / GetDisplayPixelFormatSize(texture_format));
+  }
 
   const GLuint texture = static_cast<GLuint>(reinterpret_cast<uintptr_t>(texture_handle));
   const auto [gl_internal_format, gl_format, gl_type] =
@@ -145,7 +152,8 @@ bool OpenGLHostDisplay::DownloadTexture(const void* texture_handle, HostDisplayP
                                   out_data);
 
   glPixelStorei(GL_PACK_ALIGNMENT, old_alignment);
-  glPixelStorei(GL_PACK_ROW_LENGTH, old_row_length);
+  if (!m_use_gles2_draw_path)
+    glPixelStorei(GL_PACK_ROW_LENGTH, old_row_length);
   return true;
 }
 
@@ -335,7 +343,9 @@ bool OpenGLHostDisplay::CreateRenderDevice(const WindowInfo& wi, std::string_vie
 bool OpenGLHostDisplay::InitializeRenderDevice(std::string_view shader_cache_directory, bool debug_device,
                                                bool threaded_presentation)
 {
-  glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, reinterpret_cast<GLint*>(&m_uniform_buffer_alignment));
+  m_use_gles2_draw_path = (GetRenderAPI() == HostDisplay::RenderAPI::OpenGLES && !GLAD_GL_ES_VERSION_3_0);
+  if (!m_use_gles2_draw_path)
+    glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, reinterpret_cast<GLint*>(&m_uniform_buffer_alignment));
 
   if (debug_device && GLAD_GL_KHR_debug)
   {
@@ -485,7 +495,6 @@ void OpenGLHostDisplay::DestroyImGuiContext()
 
 bool OpenGLHostDisplay::CreateResources()
 {
-  m_use_gles2_draw_path = (GetRenderAPI() == HostDisplay::RenderAPI::OpenGLES && !GLAD_GL_ES_VERSION_3_0);
   if (!m_use_gles2_draw_path)
   {
     static constexpr char fullscreen_quad_vertex_shader[] = R"(

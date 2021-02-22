@@ -111,6 +111,8 @@ void Settings::Load(SettingsInterface& si)
 
   emulation_speed = si.GetFloatValue("Main", "EmulationSpeed", 1.0f);
   fast_forward_speed = si.GetFloatValue("Main", "FastForwardSpeed", 0.0f);
+  turbo_speed = si.GetFloatValue("Main", "TurboSpeed", 0.0f);
+  sync_to_host_refresh_rate = si.GetBoolValue("Main", "SyncToHostRefreshRate", false);
   increase_timer_resolution = si.GetBoolValue("Main", "IncreaseTimerResolution", true);
   start_paused = si.GetBoolValue("Main", "StartPaused", false);
   start_fullscreen = si.GetBoolValue("Main", "StartFullscreen", false);
@@ -121,6 +123,10 @@ void Settings::Load(SettingsInterface& si)
   apply_game_settings = si.GetBoolValue("Main", "ApplyGameSettings", true);
   auto_load_cheats = si.GetBoolValue("Main", "AutoLoadCheats", false);
   disable_all_enhancements = si.GetBoolValue("Main", "DisableAllEnhancements", false);
+  rewind_enable = si.GetBoolValue("Main", "RewindEnable", false);
+  rewind_save_frequency = si.GetFloatValue("Main", "RewindFrequency", 10.0f);
+  rewind_save_slots = static_cast<u32>(si.GetIntValue("Main", "RewindSaveSlots", 10));
+  runahead_frames = static_cast<u32>(si.GetIntValue("Main", "RunaheadFrameCount", 0));
 
   cpu_execution_mode =
     ParseCPUExecutionMode(
@@ -155,7 +161,7 @@ void Settings::Load(SettingsInterface& si)
     ParseDownsampleModeName(
       si.GetStringValue("GPU", "DownsampleMode", GetDownsampleModeName(DEFAULT_GPU_DOWNSAMPLE_MODE)).c_str())
       .value_or(DEFAULT_GPU_DOWNSAMPLE_MODE);
-  gpu_disable_interlacing = si.GetBoolValue("GPU", "DisableInterlacing", false);
+  gpu_disable_interlacing = si.GetBoolValue("GPU", "DisableInterlacing", true);
   gpu_force_ntsc_timings = si.GetBoolValue("GPU", "ForceNTSCTimings", false);
   gpu_widescreen_hack = si.GetBoolValue("GPU", "WidescreenHack", false);
   gpu_24bit_chroma_smoothing = si.GetBoolValue("GPU", "ChromaSmoothing24Bit", false);
@@ -190,6 +196,7 @@ void Settings::Load(SettingsInterface& si)
   display_show_vps = si.GetBoolValue("Display", "ShowVPS", false);
   display_show_speed = si.GetBoolValue("Display", "ShowSpeed", false);
   display_show_resolution = si.GetBoolValue("Display", "ShowResolution", false);
+  display_all_frames = si.GetBoolValue("Display", "DisplayAllFrames", false);
   video_sync_enabled = si.GetBoolValue("Display", "VSync", true);
   display_post_process_chain = si.GetStringValue("Display", "PostProcessChain", "");
   display_max_fps = si.GetFloatValue("Display", "MaxFPS", 0.0f);
@@ -206,6 +213,7 @@ void Settings::Load(SettingsInterface& si)
   audio_output_volume = si.GetIntValue("Audio", "OutputVolume", 100);
   audio_fast_forward_volume = si.GetIntValue("Audio", "FastForwardVolume", 100);
   audio_buffer_size = si.GetIntValue("Audio", "BufferSize", HostInterface::DEFAULT_AUDIO_BUFFER_SIZE);
+  audio_resampling = si.GetBoolValue("Audio", "Resampling", true);
   audio_output_muted = si.GetBoolValue("Audio", "OutputMuted", false);
   audio_sync_enabled = si.GetBoolValue("Audio", "Sync", true);
   audio_dump_on_boot = si.GetBoolValue("Audio", "DumpOnBoot", false);
@@ -254,7 +262,7 @@ void Settings::Load(SettingsInterface& si)
   debugging.dump_cpu_to_vram_copies = si.GetBoolValue("Debug", "DumpCPUToVRAMCopies");
   debugging.dump_vram_to_cpu_copies = si.GetBoolValue("Debug", "DumpVRAMToCPUCopies");
   debugging.enable_gdb_server = si.GetBoolValue("Debug", "EnableGDBServer");
-  debugging.gdb_server_port = si.GetIntValue("Debug", "GDBServerPort");
+  debugging.gdb_server_port = static_cast<u16>(si.GetIntValue("Debug", "GDBServerPort"));
   debugging.show_gpu_state = si.GetBoolValue("Debug", "ShowGPUState");
   debugging.show_cdrom_state = si.GetBoolValue("Debug", "ShowCDROMState");
   debugging.show_spu_state = si.GetBoolValue("Debug", "ShowSPUState");
@@ -280,6 +288,8 @@ void Settings::Save(SettingsInterface& si) const
 
   si.SetFloatValue("Main", "EmulationSpeed", emulation_speed);
   si.SetFloatValue("Main", "FastForwardSpeed", fast_forward_speed);
+  si.SetFloatValue("Main", "TurboSpeed", turbo_speed);
+  si.SetBoolValue("Main", "SyncToHostRefreshRate", sync_to_host_refresh_rate);
   si.SetBoolValue("Main", "IncreaseTimerResolution", increase_timer_resolution);
   si.SetBoolValue("Main", "StartPaused", start_paused);
   si.SetBoolValue("Main", "StartFullscreen", start_fullscreen);
@@ -290,6 +300,10 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("Main", "ApplyGameSettings", apply_game_settings);
   si.SetBoolValue("Main", "AutoLoadCheats", auto_load_cheats);
   si.SetBoolValue("Main", "DisableAllEnhancements", disable_all_enhancements);
+  si.SetBoolValue("Main", "RewindEnable", rewind_enable);
+  si.SetFloatValue("Main", "RewindFrequency", rewind_save_frequency);
+  si.SetIntValue("Main", "RewindSaveSlots", rewind_save_slots);
+  si.SetIntValue("Main", "RunaheadFrameCount", runahead_frames);
 
   si.SetStringValue("CPU", "ExecutionMode", GetCPUExecutionModeName(cpu_execution_mode));
   si.SetBoolValue("CPU", "OverclockEnable", cpu_overclock_enable);
@@ -340,6 +354,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("Display", "ShowVPS", display_show_vps);
   si.SetBoolValue("Display", "ShowSpeed", display_show_speed);
   si.SetBoolValue("Display", "ShowResolution", display_show_speed);
+  si.SetBoolValue("Display", "DisplayAllFrames", display_all_frames);
   si.SetBoolValue("Display", "VSync", video_sync_enabled);
   if (display_post_process_chain.empty())
     si.DeleteValue("Display", "PostProcessChain");
@@ -357,6 +372,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetIntValue("Audio", "OutputVolume", audio_output_volume);
   si.SetIntValue("Audio", "FastForwardVolume", audio_fast_forward_volume);
   si.SetIntValue("Audio", "BufferSize", audio_buffer_size);
+  si.SetBoolValue("Audio", "Resampling", audio_resampling);
   si.SetBoolValue("Audio", "OutputMuted", audio_output_muted);
   si.SetBoolValue("Audio", "Sync", audio_sync_enabled);
   si.SetBoolValue("Audio", "DumpOnBoot", audio_dump_on_boot);
@@ -691,12 +707,12 @@ const char* Settings::GetDisplayCropModeDisplayName(DisplayCropMode crop_mode)
   return s_display_crop_mode_display_names[static_cast<int>(crop_mode)];
 }
 
-static std::array<const char*, 13> s_display_aspect_ratio_names = {
-  {TRANSLATABLE("DisplayAspectRatio", "Auto (Game Native)"), "4:3", "16:9", "16:10", "19:9", "21:9", "32:9", "8:7",
-   "5:4", "3:2", "2:1 (VRAM 1:1)", "1:1", "PAR 1:1"}};
-static constexpr std::array<float, 13> s_display_aspect_ratio_values = {
-  {-1.0f, 4.0f / 3.0f, 16.0f / 9.0f, 16.0f / 10.0f, 19.0f / 9.0f, 64.0f / 27.0f, 32.0f / 9.0f, 8.0f / 7.0f, 5.0f / 4.0f,
-   3.0f / 2.0f, 2.0f / 1.0f, 1.0f, -1.0f}};
+static std::array<const char*, 14> s_display_aspect_ratio_names = {
+  {TRANSLATABLE("DisplayAspectRatio", "Auto (Game Native)"), "4:3", "16:9", "16:10", "19:9", "20:9", "21:9", "32:9",
+   "8:7", "5:4", "3:2", "2:1 (VRAM 1:1)", "1:1", "PAR 1:1"}};
+static constexpr std::array<float, 14> s_display_aspect_ratio_values = {
+  {-1.0f, 4.0f / 3.0f, 16.0f / 9.0f, 16.0f / 10.0f, 19.0f / 9.0f, 20.0f / 9.0f, 64.0f / 27.0f, 32.0f / 9.0f,
+   8.0f / 7.0f, 5.0f / 4.0f, 3.0f / 2.0f, 2.0f / 1.0f, 1.0f, -1.0f}};
 
 std::optional<DisplayAspectRatio> Settings::ParseDisplayAspectRatio(const char* str)
 {

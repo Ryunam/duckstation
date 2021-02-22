@@ -33,9 +33,9 @@
 
 static constexpr char DISC_IMAGE_FILTER[] = QT_TRANSLATE_NOOP(
   "MainWindow",
-  "All File Types (*.bin *.img *.iso *.cue *.chd *.exe *.psexe *.psf *.m3u);;Single-Track Raw Images (*.bin *.img "
-  "*.iso);;Cue Sheets (*.cue);;MAME CHD Images (*.chd);;PlayStation Executables (*.exe *.psexe);;Portable Sound Format "
-  "Files (*.psf);;Playlists (*.m3u)");
+  "All File Types (*.bin *.img *.iso *.cue *.chd *.exe *.psexe *.psf *.minipsf *.m3u);;Single-Track Raw Images (*.bin "
+  "*.img *.iso);;Cue Sheets (*.cue);;MAME CHD Images (*.chd);;PlayStation Executables (*.exe *.psexe);;Portable Sound "
+  "Format Files (*.psf *.minipsf);;Playlists (*.m3u)");
 
 ALWAYS_INLINE static QString getWindowTitle()
 {
@@ -173,6 +173,25 @@ QtDisplayWidget* MainWindow::updateDisplay(QThread* worker_thread, bool fullscre
   const bool is_exclusive_fullscreen = (fullscreen && !fullscreen_mode.empty() && m_host_display->SupportsFullscreen());
   if (fullscreen == is_fullscreen && is_rendering_to_main == render_to_main)
     return m_display_widget;
+
+  // Skip recreating the surface if we're just transitioning between fullscreen and windowed with render-to-main off.
+  if (!is_rendering_to_main && !render_to_main && !is_exclusive_fullscreen)
+  {
+    qDebug() << "Toggling to" << (fullscreen ? "fullscreen" : "windowed") << "without recreating surface";
+    if (fullscreen)
+    {
+      m_display_widget->showFullScreen();
+    }
+    else
+    {
+      restoreDisplayWindowGeometryFromConfig();
+      m_display_widget->showNormal();
+    }
+
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    updateMouseMode(System::IsPaused());
+    return m_display_widget;
+  }
 
   m_host_display->DestroyRenderSurface();
 
@@ -821,6 +840,9 @@ void MainWindow::updateEmulationActions(bool starting, bool running)
   m_ui.menuCheats->setDisabled(starting || !running);
   m_ui.actionCheatManager->setDisabled(starting || !running);
   m_ui.actionCPUDebugger->setDisabled(starting || !running);
+  m_ui.actionDumpRAM->setDisabled(starting || !running);
+  m_ui.actionDumpVRAM->setDisabled(starting || !running);
+  m_ui.actionDumpSPURAM->setDisabled(starting || !running);
 
   m_ui.actionSaveState->setDisabled(starting || !running);
   m_ui.menuSaveState->setDisabled(starting || !running);
@@ -947,6 +969,8 @@ void MainWindow::connectSignals()
           [this]() { doSettings(SettingsDialog::Category::BIOSSettings); });
   connect(m_ui.actionConsoleSettings, &QAction::triggered,
           [this]() { doSettings(SettingsDialog::Category::ConsoleSettings); });
+  connect(m_ui.actionEmulationSettings, &QAction::triggered,
+          [this]() { doSettings(SettingsDialog::Category::EmulationSettings); });
   connect(m_ui.actionGameListSettings, &QAction::triggered,
           [this]() { doSettings(SettingsDialog::Category::GameListSettings); });
   connect(m_ui.actionHotkeySettings, &QAction::triggered,
@@ -1041,11 +1065,28 @@ void MainWindow::connectSignals()
       m_host_interface->stopDumpingAudio();
   });
   connect(m_ui.actionDumpRAM, &QAction::triggered, [this]() {
-    const QString filename = QFileDialog::getSaveFileName(this, tr("Destination File"));
+    const QString filename =
+      QFileDialog::getSaveFileName(this, tr("Destination File"), QString(), tr("Binary Files (*.bin)"));
     if (filename.isEmpty())
       return;
 
     m_host_interface->dumpRAM(filename);
+  });
+  connect(m_ui.actionDumpVRAM, &QAction::triggered, [this]() {
+    const QString filename = QFileDialog::getSaveFileName(this, tr("Destination File"), QString(),
+                                                          tr("Binary Files (*.bin);;PNG Images (*.png)"));
+    if (filename.isEmpty())
+      return;
+
+    m_host_interface->dumpVRAM(filename);
+  });
+  connect(m_ui.actionDumpSPURAM, &QAction::triggered, [this]() {
+    const QString filename =
+      QFileDialog::getSaveFileName(this, tr("Destination File"), QString(), tr("Binary Files (*.bin)"));
+    if (filename.isEmpty())
+      return;
+
+    m_host_interface->dumpSPURAM(filename);
   });
   SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.actionDebugShowVRAM, "Debug", "ShowVRAM");
   SettingWidgetBinder::BindWidgetToBoolSetting(m_host_interface, m_ui.actionDebugShowGPUState, "Debug", "ShowGPUState");

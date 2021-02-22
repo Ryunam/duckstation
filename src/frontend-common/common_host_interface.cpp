@@ -77,10 +77,7 @@ bool CommonHostInterface::Initialize()
 
   m_save_state_selector_ui = std::make_unique<FrontendCommon::SaveStateSelectorUI>(this);
 
-  RegisterGeneralHotkeys();
-  RegisterGraphicsHotkeys();
-  RegisterSaveStateHotkeys();
-  RegisterAudioHotkeys();
+  RegisterHotkeys();
 
   UpdateControllerInterface();
   return true;
@@ -440,8 +437,8 @@ bool CommonHostInterface::SetFullscreen(bool enabled)
 
 bool CommonHostInterface::CreateHostDisplayResources()
 {
-  m_logo_texture =
-    m_display->CreateTexture(APP_ICON_WIDTH, APP_ICON_HEIGHT, APP_ICON_DATA, sizeof(u32) * APP_ICON_WIDTH, false);
+  m_logo_texture = m_display->CreateTexture(APP_ICON_WIDTH, APP_ICON_HEIGHT, 1, 1, 1, HostDisplayPixelFormat::RGBA8,
+                                            APP_ICON_DATA, sizeof(u32) * APP_ICON_WIDTH, false);
   if (!m_logo_texture)
     Log_WarningPrintf("Failed to create logo texture");
 
@@ -475,7 +472,7 @@ std::unique_ptr<AudioStream> CommonHostInterface::CreateAudioStream(AudioBackend
 
 s32 CommonHostInterface::GetAudioOutputVolume() const
 {
-  return g_settings.GetAudioOutputVolume(!m_speed_limiter_enabled);
+  return g_settings.GetAudioOutputVolume(IsRunningAtNonStandardSpeed());
 }
 
 void CommonHostInterface::UpdateControllerInterface()
@@ -602,23 +599,66 @@ bool CommonHostInterface::ResumeSystemFromMostRecentState()
   return LoadState(path.c_str());
 }
 
+bool CommonHostInterface::IsRunningAtNonStandardSpeed() const
+{
+  if (!System::IsValid())
+    return false;
+
+  const float target_speed = System::GetTargetSpeed();
+  return (target_speed <= 0.95f || target_speed >= 1.05f);
+}
+
 void CommonHostInterface::UpdateSpeedLimiterState()
 {
-  const float target_speed = m_fast_forward_enabled ? g_settings.fast_forward_speed : g_settings.emulation_speed;
-  m_speed_limiter_enabled = (target_speed != 0.0f);
+  float target_speed = m_turbo_enabled ?
+                         g_settings.turbo_speed :
+                         (m_fast_forward_enabled ? g_settings.fast_forward_speed : g_settings.emulation_speed);
+  m_throttler_enabled = (target_speed != 0.0f);
+  m_display_all_frames = !m_throttler_enabled || g_settings.display_all_frames;
+
+  bool syncing_to_host = false;
+  if (g_settings.sync_to_host_refresh_rate && g_settings.audio_resampling && target_speed == 1.0f && m_display &&
+      System::IsRunning())
+  {
+    float host_refresh_rate;
+    if (m_display->GetHostRefreshRate(&host_refresh_rate))
+    {
+      const float ratio = host_refresh_rate / System::GetThrottleFrequency();
+      syncing_to_host = (ratio >= 0.95f && ratio <= 1.05f);
+      Log_InfoPrintf("Refresh rate: Host=%fhz Guest=%fhz Ratio=%f - %s", host_refresh_rate,
+                     System::GetThrottleFrequency(), ratio, syncing_to_host ? "can sync" : "can't sync");
+      if (syncing_to_host)
+        target_speed *= ratio;
+    }
+  }
 
   const bool is_non_standard_speed = (std::abs(target_speed - 1.0f) > 0.05f);
   const bool audio_sync_enabled =
-    !System::IsRunning() || (m_speed_limiter_enabled && g_settings.audio_sync_enabled && !is_non_standard_speed);
+    !System::IsRunning() || (m_throttler_enabled && g_settings.audio_sync_enabled && !is_non_standard_speed);
   const bool video_sync_enabled =
-    !System::IsRunning() || (m_speed_limiter_enabled && g_settings.video_sync_enabled && !is_non_standard_speed);
-  const float max_display_fps = m_speed_limiter_enabled ? 0.0f : g_settings.display_max_fps;
+    !System::IsRunning() || (m_throttler_enabled && g_settings.video_sync_enabled && !is_non_standard_speed);
+  const float max_display_fps = m_throttler_enabled ? 0.0f : g_settings.display_max_fps;
+  Log_InfoPrintf("Target speed: %f%%", target_speed * 100.0f);
   Log_InfoPrintf("Syncing to %s%s", audio_sync_enabled ? "audio" : "",
                  (audio_sync_enabled && video_sync_enabled) ? " and video" : (video_sync_enabled ? "video" : ""));
-  Log_InfoPrintf("Max display fps: %f", max_display_fps);
+  Log_InfoPrintf("Max display fps: %f (%s)", max_display_fps,
+                 m_display_all_frames ? "displaying all frames" : "skipping displaying frames when needed");
+
+  if (System::IsValid())
+  {
+    System::SetTargetSpeed(target_speed);
+    System::ResetPerformanceCounters();
+  }
 
   if (m_audio_stream)
   {
+    const u32 input_sample_rate = (target_speed == 0.0f || !g_settings.audio_resampling) ?
+                                    AUDIO_SAMPLE_RATE :
+                                    static_cast<u32>(static_cast<float>(AUDIO_SAMPLE_RATE) * target_speed);
+    Log_InfoPrintf("Audio input sample rate: %u hz", input_sample_rate);
+
+    m_audio_stream->SetInputSampleRate(input_sample_rate);
+    m_audio_stream->SetWaitForBufferFill(!m_display_all_frames);
     m_audio_stream->SetOutputVolume(GetAudioOutputVolume());
     m_audio_stream->SetSync(audio_sync_enabled);
     if (audio_sync_enabled)
@@ -632,12 +672,13 @@ void CommonHostInterface::UpdateSpeedLimiterState()
   }
 
   if (g_settings.increase_timer_resolution)
-    SetTimerResolutionIncreased(m_speed_limiter_enabled);
+    SetTimerResolutionIncreased(m_throttler_enabled);
 
-  if (System::IsValid())
+  // When syncing to host and using vsync, we don't need to sleep.
+  if (syncing_to_host && video_sync_enabled && m_display_all_frames)
   {
-    System::SetTargetSpeed(m_speed_limiter_enabled ? target_speed : 1.0f);
-    System::ResetPerformanceCounters();
+    Log_InfoPrintf("Using host vsync for throttling.");
+    m_throttler_enabled = false;
   }
 }
 
@@ -898,6 +939,7 @@ void CommonHostInterface::DrawOSDMessages()
     return;
 
   const float scale = ImGui::GetIO().DisplayFramebufferScale.x;
+  const float max_width = ImGui::GetIO().DisplaySize.x - (20.0f * scale);
 
   auto iter = m_osd_messages.begin();
   float position_x = 10.0f * scale;
@@ -921,8 +963,11 @@ void CommonHostInterface::DrawOSDMessages()
     }
 
     const float opacity = std::min(time_remaining, 1.0f);
+    const ImVec2 text_size(ImGui::CalcTextSize(msg.text.c_str(), nullptr));
+    const bool wrapped = (text_size.x > max_width);
+
     ImGui::SetNextWindowPos(ImVec2(position_x, position_y));
-    ImGui::SetNextWindowSize(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(wrapped ? max_width : 0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opacity);
 
     char buf[64];
@@ -930,7 +975,11 @@ void CommonHostInterface::DrawOSDMessages()
 
     if (ImGui::Begin(buf, nullptr, window_flags))
     {
-      ImGui::TextUnformatted(msg.text.c_str());
+      if (wrapped)
+        ImGui::TextWrapped("%s", msg.text.c_str());
+      else
+        ImGui::TextUnformatted(msg.text.c_str());
+
       position_y += ImGui::GetWindowSize().y + (4.0f * scale);
     }
 
@@ -1041,21 +1090,44 @@ void CommonHostInterface::AddControllerRumble(u32 controller_index, u32 num_moto
   rumble.num_motors = std::min<u32>(num_motors, ControllerRumbleState::MAX_MOTORS);
   rumble.last_strength.fill(0.0f);
   rumble.update_callback = std::move(callback);
+  rumble.last_update_time = Common::Timer::GetValue();
   m_controller_vibration_motors.push_back(std::move(rumble));
 }
 
 void CommonHostInterface::UpdateControllerRumble()
 {
+  if (m_controller_vibration_motors.empty())
+    return;
+
+  // Rumble update frequency in milliseconds.
+  // We won't send an update to the controller unless this amount of time has passed, if the value has not changed.
+  // This is because the rumble update is synchronous, and with bluetooth latency can severely impact fast forward
+  // performance.
+  static constexpr float UPDATE_FREQUENCY = 1000.0f;
+  const u64 time = Common::Timer::GetValue();
+
   for (ControllerRumbleState& rumble : m_controller_vibration_motors)
   {
     Controller* controller = System::GetController(rumble.controller_index);
     if (!controller)
       continue;
 
+    bool changed = false;
     for (u32 i = 0; i < rumble.num_motors; i++)
-      rumble.last_strength[i] = controller->GetVibrationMotorStrength(i);
+    {
+      const float strength = controller->GetVibrationMotorStrength(i);
+      if (rumble.last_strength[i] != strength)
+      {
+        rumble.last_strength[i] = strength;
+        changed = true;
+      }
+    }
 
-    rumble.update_callback(rumble.last_strength.data(), rumble.num_motors);
+    if (changed || Common::Timer::ConvertValueToMilliseconds(time - rumble.last_update_time) >= UPDATE_FREQUENCY)
+    {
+      rumble.last_update_time = time;
+      rumble.update_callback(rumble.last_strength.data(), rumble.num_motors);
+    }
   }
 }
 
@@ -1425,12 +1497,23 @@ bool CommonHostInterface::AddRumbleToInputMap(const std::string& binding, u32 co
   return false;
 }
 
+void CommonHostInterface::RegisterHotkeys()
+{
+  RegisterGeneralHotkeys();
+  RegisterGraphicsHotkeys();
+  RegisterSaveStateHotkeys();
+  RegisterAudioHotkeys();
+}
+
 void CommonHostInterface::RegisterGeneralHotkeys()
 {
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("FastForward"),
                  TRANSLATABLE("Hotkeys", "Fast Forward"), [this](bool pressed) {
                    m_fast_forward_enabled = pressed;
                    UpdateSpeedLimiterState();
+                   AddOSDMessage(m_fast_forward_enabled ? TranslateStdString("OSDMessage", "Fast forwarding...") :
+                                                          TranslateStdString("OSDMessage", "Stopped fast forwarding."),
+                                 2.0f);
                  });
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("ToggleFastForward"),
@@ -1442,6 +1525,27 @@ void CommonHostInterface::RegisterGeneralHotkeys()
                      AddOSDMessage(m_fast_forward_enabled ?
                                      TranslateStdString("OSDMessage", "Fast forwarding...") :
                                      TranslateStdString("OSDMessage", "Stopped fast forwarding."),
+                                   2.0f);
+                   }
+                 });
+
+  RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("Turbo"),
+                 TRANSLATABLE("Hotkeys", "Turbo"), [this](bool pressed) {
+                   m_turbo_enabled = pressed;
+                   UpdateSpeedLimiterState();
+                   AddOSDMessage(m_turbo_enabled ? TranslateStdString("OSDMessage", "Turboing...") :
+                                                   TranslateStdString("OSDMessage", "Stopped turboing."),
+                                 2.0f);
+                 });
+
+  RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("ToggleTurbo"),
+                 StaticString(TRANSLATABLE("Hotkeys", "Toggle Turbo")), [this](bool pressed) {
+                   if (pressed)
+                   {
+                     m_turbo_enabled = !m_turbo_enabled;
+                     UpdateSpeedLimiterState();
+                     AddOSDMessage(m_turbo_enabled ? TranslateStdString("OSDMessage", "Turboing...") :
+                                                     TranslateStdString("OSDMessage", "Stopped turboing."),
                                    2.0f);
                    }
                  });
@@ -1460,7 +1564,7 @@ void CommonHostInterface::RegisterGeneralHotkeys()
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("ToggleCheats"),
                  StaticString(TRANSLATABLE("Hotkeys", "Toggle Cheats")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      DoToggleCheats();
                  });
 
@@ -1495,9 +1599,9 @@ void CommonHostInterface::RegisterGeneralHotkeys()
 #else
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("TogglePatchCodes"),
                  StaticString(TRANSLATABLE("Hotkeys", "Toggle Patch Codes")), [this](bool pressed) {
-              if (pressed)
-                DoToggleCheats();
-          });
+                   if (pressed && System::IsValid())
+                     DoToggleCheats();
+                 });
 #endif
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("Reset"),
@@ -1514,8 +1618,19 @@ void CommonHostInterface::RegisterGeneralHotkeys()
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("FrameStep"),
                  StaticString(TRANSLATABLE("Hotkeys", "Frame Step")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      DoFrameStep();
+                 });
+
+  RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "General")), StaticString("Rewind"),
+                 StaticString(TRANSLATABLE("Hotkeys", "Rewind")), [this](bool pressed) {
+                   if (System::IsValid())
+                   {
+                     AddOSDMessage(pressed ? TranslateStdString("OSDMessage", "Rewinding...") :
+                                             TranslateStdString("OSDMessage", "Stopped rewinding."),
+                                   5.0f);
+                     System::SetRewinding(pressed);
+                   }
                  });
 }
 
@@ -1523,16 +1638,19 @@ void CommonHostInterface::RegisterGraphicsHotkeys()
 {
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("ToggleSoftwareRendering"),
                  StaticString(TRANSLATABLE("Hotkeys", "Toggle Software Rendering")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      ToggleSoftwareRendering();
                  });
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("TogglePGXP"),
                  StaticString(TRANSLATABLE("Hotkeys", "Toggle PGXP")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                    {
                      g_settings.gpu_pgxp_enable = !g_settings.gpu_pgxp_enable;
+                     g_gpu->RestoreGraphicsAPIState();
                      g_gpu->UpdateSettings();
+                     g_gpu->ResetGraphicsAPIState();
+                     System::ClearMemorySaveStates();
                      AddOSDMessage(g_settings.gpu_pgxp_enable ?
                                      TranslateStdString("OSDMessage", "PGXP is now enabled.") :
                                      TranslateStdString("OSDMessage", "PGXP is now disabled"),
@@ -1551,13 +1669,16 @@ void CommonHostInterface::RegisterGraphicsHotkeys()
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("TogglePGXPDepth"),
                  StaticString(TRANSLATABLE("Hotkeys", "Toggle PGXP Depth Buffer")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                    {
                      g_settings.gpu_pgxp_depth_buffer = !g_settings.gpu_pgxp_depth_buffer;
                      if (!g_settings.gpu_pgxp_enable)
                        return;
 
+                     g_gpu->RestoreGraphicsAPIState();
                      g_gpu->UpdateSettings();
+                     g_gpu->ResetGraphicsAPIState();
+                     System::ClearMemorySaveStates();
                      AddOSDMessage(g_settings.gpu_pgxp_depth_buffer ?
                                      TranslateStdString("OSDMessage", "PGXP Depth Buffer is now enabled.") :
                                      TranslateStdString("OSDMessage", "PGXP Depth Buffer is now disabled."),
@@ -1567,31 +1688,31 @@ void CommonHostInterface::RegisterGraphicsHotkeys()
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("IncreaseResolutionScale"),
                  StaticString(TRANSLATABLE("Hotkeys", "Increase Resolution Scale")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      ModifyResolutionScale(1);
                  });
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("DecreaseResolutionScale"),
                  StaticString(TRANSLATABLE("Hotkeys", "Decrease Resolution Scale")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      ModifyResolutionScale(-1);
                  });
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("TogglePostProcessing"),
                  StaticString(TRANSLATABLE("Hotkeys", "Toggle Post-Processing")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      TogglePostProcessing();
                  });
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("ReloadPostProcessingShaders"),
                  StaticString(TRANSLATABLE("Hotkeys", "Reload Post Processing Shaders")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                      ReloadPostProcessingShaders();
                  });
 
   RegisterHotkey(StaticString(TRANSLATABLE("Hotkeys", "Graphics")), StaticString("ReloadTextureReplacements"),
                  StaticString(TRANSLATABLE("Hotkeys", "Reload Texture Replacements")), [this](bool pressed) {
-                   if (pressed)
+                   if (pressed && System::IsValid())
                    {
                      AddOSDMessage(TranslateStdString("OSDMessage", "Texture replacements reloaded."), 10.0f);
                      g_texture_replacements.Reload();
@@ -2190,7 +2311,10 @@ void CommonHostInterface::CheckForSettingsChanges(const Settings& old_settings)
         g_settings.increase_timer_resolution != old_settings.increase_timer_resolution ||
         g_settings.emulation_speed != old_settings.emulation_speed ||
         g_settings.fast_forward_speed != old_settings.fast_forward_speed ||
-        g_settings.display_max_fps != old_settings.display_max_fps)
+        g_settings.display_max_fps != old_settings.display_max_fps ||
+        g_settings.display_all_frames != old_settings.display_all_frames ||
+        g_settings.audio_resampling != old_settings.audio_resampling ||
+        g_settings.sync_to_host_refresh_rate != old_settings.sync_to_host_refresh_rate)
     {
       UpdateSpeedLimiterState();
     }

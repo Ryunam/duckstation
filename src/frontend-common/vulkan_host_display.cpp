@@ -9,6 +9,7 @@
 #include "common/vulkan/stream_buffer.h"
 #include "common/vulkan/swap_chain.h"
 #include "common/vulkan/util.h"
+#include "core/shader_cache_version.h"
 #include "postprocessing_shadergen.h"
 #include <array>
 #ifdef WITH_IMGUI
@@ -22,8 +23,9 @@ namespace FrontendCommon {
 class VulkanHostDisplayTexture : public HostDisplayTexture
 {
 public:
-  VulkanHostDisplayTexture(Vulkan::Texture texture, Vulkan::StagingTexture staging_texture)
-    : m_texture(std::move(texture)), m_staging_texture(std::move(staging_texture))
+  VulkanHostDisplayTexture(Vulkan::Texture texture, Vulkan::StagingTexture staging_texture,
+                           HostDisplayPixelFormat format)
+    : m_texture(std::move(texture)), m_staging_texture(std::move(staging_texture)), m_format(format)
   {
   }
   ~VulkanHostDisplayTexture() override = default;
@@ -31,64 +33,19 @@ public:
   void* GetHandle() const override { return const_cast<Vulkan::Texture*>(&m_texture); }
   u32 GetWidth() const override { return m_texture.GetWidth(); }
   u32 GetHeight() const override { return m_texture.GetHeight(); }
+  u32 GetLayers() const override { return m_texture.GetLayers(); }
+  u32 GetLevels() const override { return m_texture.GetLevels(); }
+  u32 GetSamples() const override { return m_texture.GetSamples(); }
+  HostDisplayPixelFormat GetFormat() const override { return m_format; }
 
   const Vulkan::Texture& GetTexture() const { return m_texture; }
   Vulkan::Texture& GetTexture() { return m_texture; }
   Vulkan::StagingTexture& GetStagingTexture() { return m_staging_texture; }
 
-  static std::unique_ptr<VulkanHostDisplayTexture> Create(u32 width, u32 height, const void* data, u32 data_stride,
-                                                          bool dynamic)
-  {
-    static constexpr VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
-    static constexpr VkImageUsageFlags usage =
-      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-
-    Vulkan::Texture texture;
-    if (!texture.Create(width, height, 1, 1, format, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_VIEW_TYPE_2D,
-                        VK_IMAGE_TILING_OPTIMAL, usage))
-    {
-      return {};
-    }
-
-    Vulkan::StagingTexture staging_texture;
-    if (data || dynamic)
-    {
-      if (!staging_texture.Create(dynamic ? Vulkan::StagingBuffer::Type::Mutable : Vulkan::StagingBuffer::Type::Upload,
-                                  format, width, height))
-      {
-        return {};
-      }
-    }
-
-    texture.TransitionToLayout(g_vulkan_context->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-    if (data)
-    {
-      staging_texture.WriteTexels(0, 0, width, height, data, data_stride);
-      staging_texture.CopyToTexture(g_vulkan_context->GetCurrentCommandBuffer(), 0, 0, texture, 0, 0, 0, 0, width,
-                                    height);
-    }
-    else
-    {
-      // clear it instead so we don't read uninitialized data (and keep the validation layer happy!)
-      static constexpr VkClearColorValue ccv = {};
-      static constexpr VkImageSubresourceRange isr = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
-      vkCmdClearColorImage(g_vulkan_context->GetCurrentCommandBuffer(), texture.GetImage(), texture.GetLayout(), &ccv,
-                           1u, &isr);
-    }
-
-    texture.TransitionToLayout(g_vulkan_context->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    // don't need to keep the staging texture around if we're not dynamic
-    if (!dynamic)
-      staging_texture.Destroy(true);
-
-    return std::make_unique<VulkanHostDisplayTexture>(std::move(texture), std::move(staging_texture));
-  }
-
 private:
   Vulkan::Texture m_texture;
   Vulkan::StagingTexture m_staging_texture;
+  HostDisplayPixelFormat m_format;
 };
 
 VulkanHostDisplay::VulkanHostDisplay() = default;
@@ -194,10 +151,64 @@ void VulkanHostDisplay::DestroyRenderSurface()
   m_swap_chain.reset();
 }
 
-std::unique_ptr<HostDisplayTexture> VulkanHostDisplay::CreateTexture(u32 width, u32 height, const void* data,
-                                                                     u32 data_stride, bool dynamic)
+static constexpr std::array<VkFormat, static_cast<u32>(HostDisplayPixelFormat::Count)> s_display_pixel_format_mapping =
+  {{VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R5G6B5_UNORM_PACK16,
+    VK_FORMAT_A1R5G5B5_UNORM_PACK16}};
+
+std::unique_ptr<HostDisplayTexture> VulkanHostDisplay::CreateTexture(u32 width, u32 height, u32 layers, u32 levels,
+                                                                     u32 samples, HostDisplayPixelFormat format,
+                                                                     const void* data, u32 data_stride,
+                                                                     bool dynamic /* = false */)
 {
-  return VulkanHostDisplayTexture::Create(width, height, data, data_stride, dynamic);
+  const VkFormat vk_format = s_display_pixel_format_mapping[static_cast<u32>(format)];
+  if (vk_format == VK_FORMAT_UNDEFINED)
+    return {};
+
+  static constexpr VkImageUsageFlags usage =
+    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+  Vulkan::Texture texture;
+  if (!texture.Create(width, height, levels, layers, vk_format, static_cast<VkSampleCountFlagBits>(samples),
+                      (layers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+                      usage))
+  {
+    return {};
+  }
+
+  Vulkan::StagingTexture staging_texture;
+  if (data || dynamic)
+  {
+    if (!staging_texture.Create(dynamic ? Vulkan::StagingBuffer::Type::Mutable : Vulkan::StagingBuffer::Type::Upload,
+                                vk_format, width, height))
+    {
+      return {};
+    }
+  }
+
+  texture.TransitionToLayout(g_vulkan_context->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+  if (data)
+  {
+    staging_texture.WriteTexels(0, 0, width, height, data, data_stride);
+    staging_texture.CopyToTexture(g_vulkan_context->GetCurrentCommandBuffer(), 0, 0, texture, 0, 0, 0, 0, width,
+                                  height);
+  }
+  else
+  {
+    // clear it instead so we don't read uninitialized data (and keep the validation layer happy!)
+    static constexpr VkClearColorValue ccv = {};
+    static constexpr VkImageSubresourceRange isr = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+    vkCmdClearColorImage(g_vulkan_context->GetCurrentCommandBuffer(), texture.GetImage(), texture.GetLayout(), &ccv, 1u,
+                         &isr);
+  }
+
+  texture.TransitionToLayout(g_vulkan_context->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  // don't need to keep the staging texture around if we're not dynamic
+  if (!dynamic)
+    staging_texture.Destroy(true);
+
+  return std::make_unique<VulkanHostDisplayTexture>(std::move(texture), std::move(staging_texture), format);
 }
 
 void VulkanHostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
@@ -244,10 +255,6 @@ bool VulkanHostDisplay::DownloadTexture(const void* texture_handle, HostDisplayP
   m_readback_staging_texture.ReadTexels(0, 0, width, height, out_data, out_data_stride);
   return true;
 }
-
-static constexpr std::array<VkFormat, static_cast<u32>(HostDisplayPixelFormat::Count)> s_display_pixel_format_mapping =
-  {{VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R5G6B5_UNORM_PACK16,
-    VK_FORMAT_A1R5G5B5_UNORM_PACK16}};
 
 bool VulkanHostDisplay::SupportsDisplayPixelFormat(HostDisplayPixelFormat format) const
 {
@@ -331,7 +338,7 @@ bool VulkanHostDisplay::CreateRenderDevice(const WindowInfo& wi, std::string_vie
 bool VulkanHostDisplay::InitializeRenderDevice(std::string_view shader_cache_directory, bool debug_device,
                                                bool threaded_presentation)
 {
-  Vulkan::ShaderCache::Create(shader_cache_directory, debug_device);
+  Vulkan::ShaderCache::Create(shader_cache_directory, SHADER_CACHE_VERSION, debug_device);
 
   if (!CreateResources())
     return false;
@@ -602,6 +609,9 @@ bool VulkanHostDisplay::Render()
 
     return false;
   }
+
+  // Previous frame needs to be presented before we can acquire the swap chain.
+  g_vulkan_context->WaitForPresentComplete();
 
   VkResult res = m_swap_chain->AcquireNextImage();
   if (res != VK_SUCCESS)
