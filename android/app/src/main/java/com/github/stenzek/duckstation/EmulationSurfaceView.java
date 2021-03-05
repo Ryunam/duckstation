@@ -75,6 +75,10 @@ public class EmulationSurfaceView extends SurfaceView {
             KeyEvent.KEYCODE_BUTTON_R2,     // 16
             KeyEvent.KEYCODE_BUTTON_C,      // 17
             KeyEvent.KEYCODE_BUTTON_Z,      // 18
+            KeyEvent.KEYCODE_VOLUME_DOWN,   // 19
+            KeyEvent.KEYCODE_VOLUME_UP,     // 20
+            KeyEvent.KEYCODE_MENU,          // 21
+            KeyEvent.KEYCODE_CAMERA,        // 22
     };
     private static final int[] axisCodes = new int[]{
             MotionEvent.AXIS_X,             // 0/LeftX
@@ -87,6 +91,8 @@ public class EmulationSurfaceView extends SurfaceView {
             MotionEvent.AXIS_RY,            // 7
             MotionEvent.AXIS_HAT_X,         // 8
             MotionEvent.AXIS_HAT_Y,         // 9
+            MotionEvent.AXIS_GAS,           // 10
+            MotionEvent.AXIS_BRAKE,         // 11
     };
 
     public static int getButtonIndexForKeyCode(int keyCode) {
@@ -161,14 +167,17 @@ public class EmulationSurfaceView extends SurfaceView {
     private ArrayList<ButtonMapping> mControllerKeyMapping;
     private ArrayList<AxisMapping> mControllerAxisMapping;
 
-    private boolean handleControllerKey(int deviceId, int keyCode, boolean pressed) {
+    private boolean handleControllerKey(int deviceId, int keyCode, int repeatCount, boolean pressed) {
         boolean result = false;
         for (ButtonMapping mapping : mControllerKeyMapping) {
             if (mapping.deviceId != deviceId || mapping.deviceAxisOrButton != keyCode)
                 continue;
 
-            AndroidHostInterface.getInstance().handleControllerButtonEvent(0, mapping.buttonMapping, pressed);
-            Log.d("EmulationSurfaceView", String.format("handleControllerKey %d -> %d %d", keyCode, mapping.buttonMapping, pressed ? 1 : 0));
+            if (repeatCount == 0) {
+                AndroidHostInterface.getInstance().handleControllerButtonEvent(0, mapping.buttonMapping, pressed);
+                Log.d("EmulationSurfaceView", String.format("handleControllerKey %d -> %d %d", keyCode, mapping.buttonMapping, pressed ? 1 : 0));
+            }
+
             result = true;
         }
 
@@ -177,24 +186,30 @@ public class EmulationSurfaceView extends SurfaceView {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (!isDPadOrButtonEvent(event) || isExternalKeyCode(keyCode))
+        if (!isDPadOrButtonEvent(event))
             return false;
 
-        if (event.getRepeatCount() == 0)
-            handleControllerKey(event.getDeviceId(), keyCode, true);
+        if (handleControllerKey(event.getDeviceId(), keyCode, event.getRepeatCount(), true))
+            return true;
 
-        return true;
+        // eat non-external button events anyway
+        return !isExternalKeyCode(keyCode);
     }
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
-        if (!isDPadOrButtonEvent(event) || isExternalKeyCode(keyCode))
+        if (!isDPadOrButtonEvent(event))
             return false;
 
-        if (event.getRepeatCount() == 0)
-            handleControllerKey(event.getDeviceId(), keyCode, false);
+        if (handleControllerKey(event.getDeviceId(), keyCode, 0, false))
+            return true;
 
-        return true;
+        // eat non-external button events anyway
+        return !isExternalKeyCode(keyCode);
+    }
+
+    private float clamp(float value, float min, float max) {
+        return (value < min) ? min : ((value > max) ? max : value);
     }
 
     @Override
@@ -211,12 +226,21 @@ public class EmulationSurfaceView extends SurfaceView {
             final float axisValue = event.getAxisValue(mapping.deviceAxisOrButton);
             float emuValue;
 
-            if (mapping.deviceMotionRange != null) {
-                final float transformedValue = (axisValue - mapping.deviceMotionRange.getMin()) / mapping.deviceMotionRange.getRange();
-                emuValue = (transformedValue * 2.0f) - 1.0f;
-            } else {
-                emuValue = axisValue;
+            switch (mapping.deviceAxisOrButton) {
+                case MotionEvent.AXIS_BRAKE:
+                case MotionEvent.AXIS_GAS:
+                case MotionEvent.AXIS_LTRIGGER:
+                case MotionEvent.AXIS_RTRIGGER:
+                    // Scale 0..1 -> -1..1.
+                    emuValue = (clamp(axisValue, 0.0f, 1.0f) * 2.0f) - 1.0f;
+                    break;
+
+                default:
+                    // Everything else should already by -1..1 as per Android documentation.
+                    emuValue = clamp(axisValue, -1.0f, 1.0f);
+                    break;
             }
+
             Log.d("EmulationSurfaceView", String.format("axis %d value %f emuvalue %f", mapping.deviceAxisOrButton, axisValue, emuValue));
 
             if (mapping.axisMapping >= 0) {

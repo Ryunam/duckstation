@@ -31,6 +31,7 @@ void SPU::Initialize()
     "SPU Transfer", TRANSFER_TICKS_PER_HALFWORD, TRANSFER_TICKS_PER_HALFWORD,
     [](void* param, TickCount ticks, TickCount ticks_late) { static_cast<SPU*>(param)->ExecuteTransfer(ticks); }, this,
     false);
+  m_audio_stream = g_host_interface->GetAudioStream();
 
   Reset();
 }
@@ -49,6 +50,7 @@ void SPU::Shutdown()
   m_tick_event.reset();
   m_transfer_event.reset();
   m_dump_writer.reset();
+  m_audio_stream = nullptr;
 }
 
 void SPU::Reset()
@@ -172,7 +174,6 @@ bool SPU::DoState(StateWrapper& sw)
 
   if (sw.IsReading())
   {
-    g_host_interface->GetAudioStream()->EmptyBuffers();
     UpdateEventInterval();
     UpdateTransferEvent();
   }
@@ -447,13 +448,14 @@ void SPU::WriteRegister(u32 offset, u16 value)
 
     case 0x1F801DA6 - SPU_BASE:
     {
-        Log_DebugPrintf("SPU transfer address register <- 0x%04X", ZeroExtend32(value));
+      Log_DebugPrintf("SPU transfer address register <- 0x%04X", ZeroExtend32(value));
       m_transfer_event->InvokeEarly();
       m_transfer_address_reg = value;
       m_transfer_address = ZeroExtend32(value) * 8;
       if (IsRAMIRQTriggerable() && CheckRAMIRQ(m_transfer_address))
       {
-        Log_DebugPrintf("Trigger IRQ @ %08X %04X from transfer address reg set", m_transfer_address, m_transfer_address / 8);
+        Log_DebugPrintf("Trigger IRQ @ %08X %04X from transfer address reg set", m_transfer_address,
+                        m_transfer_address / 8);
         TriggerRAMIRQ();
       }
       return;
@@ -481,9 +483,19 @@ void SPU::WriteRegister(u32 offset, u16 value)
         if (!m_transfer_fifo.IsEmpty())
         {
           if (m_SPUCNT.ram_transfer_mode == RAMTransferMode::DMAWrite)
-            Log_WarningPrintf("Clearing SPU transfer FIFO with %u bytes left", m_transfer_fifo.GetSize());
-
-          m_transfer_fifo.Clear();
+          {
+            // I would guess on the console it would gradually write the FIFO out. Hopefully nothing relies on this
+            // level of timing granularity if we force it all out here.
+            Log_WarningPrintf("Draining write SPU transfer FIFO with %u bytes left", m_transfer_fifo.GetSize());
+            TickCount ticks = std::numeric_limits<TickCount>::max();
+            ExecuteFIFOWriteToRAM(ticks);
+            DebugAssert(m_transfer_fifo.IsEmpty());
+          }
+          else
+          {
+            Log_DebugPrintf("Clearing read SPU transfer FIFO with %u bytes left", m_transfer_fifo.GetSize());
+            m_transfer_fifo.Clear();
+          }
         }
       }
 
@@ -744,6 +756,41 @@ void SPU::IncrementCaptureBufferPosition()
   m_SPUSTAT.second_half_capture_buffer = m_capture_buffer_position >= (CAPTURE_BUFFER_SIZE_PER_CHANNEL / 2);
 }
 
+void ALWAYS_INLINE SPU::ExecuteFIFOReadFromRAM(TickCount& ticks)
+{
+  while (ticks > 0 && !m_transfer_fifo.IsFull())
+  {
+    u16 value;
+    std::memcpy(&value, &m_ram[m_transfer_address], sizeof(u16));
+    m_transfer_address = (m_transfer_address + sizeof(u16)) & RAM_MASK;
+    m_transfer_fifo.Push(value);
+    ticks -= TRANSFER_TICKS_PER_HALFWORD;
+
+    if (IsRAMIRQTriggerable() && CheckRAMIRQ(m_transfer_address))
+    {
+      Log_DebugPrintf("Trigger IRQ @ %08X %04X from transfer read", m_transfer_address, m_transfer_address / 8);
+      TriggerRAMIRQ();
+    }
+  }
+}
+
+void ALWAYS_INLINE SPU::ExecuteFIFOWriteToRAM(TickCount& ticks)
+{
+  while (ticks > 0 && !m_transfer_fifo.IsEmpty())
+  {
+    u16 value = m_transfer_fifo.Pop();
+    std::memcpy(&m_ram[m_transfer_address], &value, sizeof(u16));
+    m_transfer_address = (m_transfer_address + sizeof(u16)) & RAM_MASK;
+    ticks -= TRANSFER_TICKS_PER_HALFWORD;
+
+    if (IsRAMIRQTriggerable() && CheckRAMIRQ(m_transfer_address))
+    {
+      Log_DebugPrintf("Trigger IRQ @ %08X %04X from transfer write", m_transfer_address, m_transfer_address / 8);
+      TriggerRAMIRQ();
+    }
+  }
+}
+
 void SPU::ExecuteTransfer(TickCount ticks)
 {
   const RAMTransferMode mode = m_SPUCNT.ram_transfer_mode;
@@ -753,20 +800,7 @@ void SPU::ExecuteTransfer(TickCount ticks)
   {
     while (ticks > 0 && !m_transfer_fifo.IsFull())
     {
-      while (ticks > 0 && !m_transfer_fifo.IsFull())
-      {
-        u16 value;
-        std::memcpy(&value, &m_ram[m_transfer_address], sizeof(u16));
-        m_transfer_address = (m_transfer_address + sizeof(u16)) & RAM_MASK;
-        m_transfer_fifo.Push(value);
-        ticks -= TRANSFER_TICKS_PER_HALFWORD;
-
-        if (IsRAMIRQTriggerable() && CheckRAMIRQ(m_transfer_address))
-        {
-          Log_DebugPrintf("Trigger IRQ @ %08X %04X from transfer read", m_transfer_address, m_transfer_address / 8);
-          TriggerRAMIRQ();
-        }
-      }
+      ExecuteFIFOReadFromRAM(ticks);
 
       // this can result in the FIFO being emptied, hence double the while loop
       UpdateDMARequest();
@@ -790,19 +824,7 @@ void SPU::ExecuteTransfer(TickCount ticks)
     // write the fifo to ram, request dma again when empty
     while (ticks > 0 && !m_transfer_fifo.IsEmpty())
     {
-      while (ticks > 0 && !m_transfer_fifo.IsEmpty())
-      {
-        u16 value = m_transfer_fifo.Pop();
-        std::memcpy(&m_ram[m_transfer_address], &value, sizeof(u16));
-        m_transfer_address = (m_transfer_address + sizeof(u16)) & RAM_MASK;
-        ticks -= TRANSFER_TICKS_PER_HALFWORD;
-
-        if (IsRAMIRQTriggerable() && CheckRAMIRQ(m_transfer_address))
-        {
-          Log_DebugPrintf("Trigger IRQ @ %08X %04X from transfer write", m_transfer_address, m_transfer_address / 8);
-          TriggerRAMIRQ();
-        }
-      }
+      ExecuteFIFOWriteToRAM(ticks);
 
       // similar deal here, the FIFO can be written out in a long slice
       UpdateDMARequest();
@@ -841,10 +863,8 @@ void SPU::UpdateTransferEvent()
   if (mode == RAMTransferMode::Stopped)
   {
     m_transfer_event->Deactivate();
-    return;
   }
-
-  if (mode == RAMTransferMode::DMARead)
+  else if (mode == RAMTransferMode::DMARead)
   {
     // transfer event fills the fifo
     if (m_transfer_fifo.IsFull())
@@ -982,7 +1002,21 @@ void SPU::GeneratePendingSamples()
   if (m_transfer_event->IsActive())
     m_transfer_event->InvokeEarly();
 
-  m_tick_event->InvokeEarly();
+  const TickCount ticks_pending = m_tick_event->GetTicksSinceLastExecution();
+  TickCount frames_to_execute;
+  if (g_settings.cpu_overclock_active)
+  {
+    frames_to_execute = static_cast<u32>((static_cast<u64>(ticks_pending) * g_settings.cpu_overclock_denominator) +
+                                         static_cast<u32>(m_ticks_carry)) /
+                        static_cast<u32>(m_cpu_tick_divider);
+  }
+  else
+  {
+    frames_to_execute = (m_tick_event->GetTicksSinceLastExecution() + m_ticks_carry) / SYSCLK_TICKS_PER_SPU_TICK;
+  }
+
+  const bool force_exec = (frames_to_execute > 0);
+  m_tick_event->InvokeEarly(force_exec);
 }
 
 bool SPU::StartDumpingAudio(const char* filename)
@@ -1698,10 +1732,9 @@ void SPU::Execute(TickCount ticks)
 
   while (remaining_frames > 0)
   {
-    AudioStream* const output_stream = g_host_interface->GetAudioStream();
     s16* output_frame_start;
     u32 output_frame_space = remaining_frames;
-    output_stream->BeginWrite(&output_frame_start, &output_frame_space);
+    m_audio_stream->BeginWrite(&output_frame_start, &output_frame_space);
 
     s16* output_frame = output_frame_start;
     const u32 frames_in_this_batch = std::min(remaining_frames, output_frame_space);
@@ -1712,10 +1745,6 @@ void SPU::Execute(TickCount ticks)
       s32 reverb_in_left = 0;
       s32 reverb_in_right = 0;
 
-      u32 key_on_register = m_key_on_register;
-      m_key_on_register = 0;
-      u32 key_off_register = m_key_off_register;
-      m_key_off_register = 0;
       u32 reverb_on_register = m_reverb_on_register;
 
       for (u32 voice = 0; voice < NUM_VOICES; voice++)
@@ -1730,17 +1759,6 @@ void SPU::Execute(TickCount ticks)
           reverb_in_right += right;
         }
         reverb_on_register >>= 1;
-
-        if (key_off_register & 1u)
-          m_voices[voice].KeyOff();
-        key_off_register >>= 1;
-
-        if (key_on_register & 1u)
-        {
-          m_endx_register &= ~(1u << voice);
-          m_voices[voice].KeyOn();
-        }
-        key_on_register >>= 1;
       }
 
       if (!m_SPUCNT.mute_n)
@@ -1790,12 +1808,36 @@ void SPU::Execute(TickCount ticks)
       WriteToCaptureBuffer(2, static_cast<s16>(Clamp16(m_voices[1].last_volume)));
       WriteToCaptureBuffer(3, static_cast<s16>(Clamp16(m_voices[3].last_volume)));
       IncrementCaptureBufferPosition();
+
+      // Key off/on voices after the first frame.
+      if (i == 0 && (m_key_off_register != 0 || m_key_on_register != 0))
+      {
+        u32 key_off_register = m_key_off_register;
+        m_key_off_register = 0;
+
+        u32 key_on_register = m_key_on_register;
+        m_key_on_register = 0;
+
+        for (u32 voice = 0; voice < NUM_VOICES; voice++)
+        {
+          if (key_off_register & 1u)
+            m_voices[voice].KeyOff();
+          key_off_register >>= 1;
+
+          if (key_on_register & 1u)
+          {
+            m_endx_register &= ~(1u << voice);
+            m_voices[voice].KeyOn();
+          }
+          key_on_register >>= 1;
+        }
+      }
     }
 
     if (m_dump_writer)
       m_dump_writer->WriteFrames(output_frame_start, frames_in_this_batch);
 
-    output_stream->EndWrite(frames_in_this_batch);
+    m_audio_stream->EndWrite(frames_in_this_batch);
     remaining_frames -= frames_in_this_batch;
   }
 }
@@ -1832,7 +1874,7 @@ void SPU::DrawDebugStateWindow()
   const float framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale.x;
 
   ImGui::SetNextWindowSize(ImVec2(800.0f * framebuffer_scale, 800.0f * framebuffer_scale), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("SPU State", &g_settings.debugging.show_spu_state))
+  if (!ImGui::Begin("SPU State", nullptr))
   {
     ImGui::End();
     return;

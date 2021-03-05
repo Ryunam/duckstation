@@ -9,12 +9,13 @@ The following people have contributed to the project in some way, and are credit
 ## Translators
 - Anderson Cardoso - Portuguese (Br)
 - @bajolzas - Portuguese (Pt)
-- posix - @Richard-L - German
+- posix - @Richard-L, blexx - German
 - @phoe-nix, @zkdpower - Chinese (Simplified)
 - Sorer - @MojoJojoDojo - Hebrew
-- Hipnosis - @Hipnosis183, MrHomunculus - Spanish
+- Hipnosis - @Hipnosis183, MrHomunculus, @falsepopsky - Spanish
 - @RaydenX93 - Italian
 - @r57zone - Russian
+- @6lackmag3 - Russian (Android)
 - @DenSinH - Dutch
 - @BenjaminSiskoo - French
 - mikakunin - Japanese

@@ -21,6 +21,8 @@ add_library(common
   cd_xa.cpp
   cd_xa.h
   cpu_detect.h
+  crash_handler.cpp
+  crash_handler.h
   dimensional_array.h
   event.cpp
   event.h
@@ -101,7 +103,7 @@ add_library(common
 
 target_include_directories(common PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(common PRIVATE glad libcue stb Threads::Threads libchdr glslang vulkan-loader zlib minizip)
+target_link_libraries(common PRIVATE glad libcue stb Threads::Threads libchdr glslang vulkan-loader zlib minizip samplerate)
 
 if(WIN32)
   target_sources(common PRIVATE
@@ -117,6 +119,8 @@ if(WIN32)
     d3d11/stream_buffer.h
     d3d11/texture.cpp
     d3d11/texture.h
+    thirdparty/StackWalker.cpp
+    thirdparty/StackWalker.h
     windows_headers.h
     win32_progress_callback.cpp
     win32_progress_callback.h
@@ -138,6 +142,14 @@ if(USE_X11)
   target_link_libraries(common PRIVATE "${X11_LIBRARIES}")
 endif()
 
+if(USE_DRMKMS)
+  target_sources(common PRIVATE
+    drm_display.cpp
+    drm_display.h
+  )
+  target_link_libraries(common PUBLIC Libdrm::Libdrm)
+endif()
+
 if(USE_EGL)
   target_sources(common PRIVATE
     gl/context_egl.cpp
@@ -150,11 +162,31 @@ if(USE_EGL)
       gl/context_egl_x11.cpp
       gl/context_egl_x11.h
     )
+
+    # We set EGL_NO_X11 because otherwise X comes in with its macros and breaks
+    # a bunch of files from compiling, if we include the EGL headers. This just
+    # makes the data types opaque, we can still use it with X11 if needed.
+    target_compile_definitions(common PRIVATE "-DEGL_NO_X11=1")
   endif()
   if(ANDROID AND USE_EGL)
     target_sources(common PRIVATE
       gl/context_egl_android.cpp
       gl/context_egl_android.h
+    )
+  endif()
+  if(USE_DRMKMS)
+    target_compile_definitions(common PRIVATE "-DUSE_GBM=1")
+    target_sources(common PRIVATE
+      gl/context_egl_gbm.cpp
+      gl/context_egl_gbm.h
+    )
+    target_link_libraries(common PUBLIC GBM::GBM)
+  endif()
+  if(USE_FBDEV)
+    target_compile_definitions(common PRIVATE "-DUSE_FBDEV=1")
+    target_sources(common PRIVATE
+      gl/context_egl_fbdev.cpp
+      gl/context_egl_fbdev.h
     )
   endif()
 endif()

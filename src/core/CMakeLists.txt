@@ -67,6 +67,8 @@ add_library(core
     memory_card.h
     memory_card_image.cpp
     memory_card_image.h
+    multitap.cpp
+    multitap.h
     namco_guncon.cpp
     namco_guncon.h
     negcon.cpp
@@ -84,6 +86,7 @@ add_library(core
     save_state_version.h
     settings.cpp
     settings.h
+    shader_cache_version.h
     shadergen.cpp
     shadergen.h
     sio.cpp
@@ -114,7 +117,8 @@ set(RECOMPILER_SRCS
 target_include_directories(core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(core PUBLIC Threads::Threads common zlib vulkan-loader)
-target_link_libraries(core PRIVATE glad stb xxhash)
+target_link_libraries(core PRIVATE glad stb xxhash imgui)
+target_compile_definitions(core PUBLIC "-DWITH_IMGUI=1")
 
 if(WIN32)
   target_sources(core PRIVATE

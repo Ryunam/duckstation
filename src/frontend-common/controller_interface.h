@@ -27,6 +27,9 @@ public:
 #ifdef ANDROID
     Android,
 #endif
+#ifdef WITH_EVDEV
+    Evdev,
+#endif
     Count
   };
 
@@ -110,6 +113,7 @@ public:
   };
   void SetHook(Hook::Callback callback);
   void ClearHook();
+  bool HasHook();
 
 protected:
   bool DoEventHook(Hook::Type type, int controller_index, int button_or_axis_number,

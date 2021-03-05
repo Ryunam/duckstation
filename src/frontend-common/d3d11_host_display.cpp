@@ -4,17 +4,17 @@
 #include "common/d3d11/shader_compiler.h"
 #include "common/log.h"
 #include "common/string_util.h"
+#include "common_host_interface.h"
 #include "core/host_interface.h"
 #include "core/settings.h"
+#include "core/shader_cache_version.h"
 #include "display_ps.hlsl.h"
 #include "display_vs.hlsl.h"
-#include "frontend-common/postprocessing_shadergen.h"
-#include <array>
-#include <dxgi1_5.h>
-#ifdef WITH_IMGUI
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
-#endif
+#include "postprocessing_shadergen.h"
+#include <array>
+#include <dxgi1_5.h>
 Log_SetChannel(D3D11HostDisplay);
 
 namespace FrontendCommon {
@@ -22,52 +22,28 @@ namespace FrontendCommon {
 class D3D11HostDisplayTexture : public HostDisplayTexture
 {
 public:
-  template<typename T>
-  using ComPtr = Microsoft::WRL::ComPtr<T>;
-
-  D3D11HostDisplayTexture(ComPtr<ID3D11Texture2D> texture, ComPtr<ID3D11ShaderResourceView> srv, u32 width, u32 height,
-                          bool dynamic)
-    : m_texture(std::move(texture)), m_srv(std::move(srv)), m_width(width), m_height(height), m_dynamic(dynamic)
+  D3D11HostDisplayTexture(D3D11::Texture texture, HostDisplayPixelFormat format, bool dynamic)
+    : m_texture(std::move(texture)), m_format(format), m_dynamic(dynamic)
   {
   }
   ~D3D11HostDisplayTexture() override = default;
 
-  void* GetHandle() const override { return m_srv.Get(); }
-  u32 GetWidth() const override { return m_width; }
-  u32 GetHeight() const override { return m_height; }
+  void* GetHandle() const override { return m_texture.GetD3DSRV(); }
+  u32 GetWidth() const override { return m_texture.GetWidth(); }
+  u32 GetHeight() const override { return m_texture.GetHeight(); }
+  u32 GetLayers() const override { return 1; }
+  u32 GetLevels() const override { return m_texture.GetLevels(); }
+  u32 GetSamples() const override { return m_texture.GetSamples(); }
+  HostDisplayPixelFormat GetFormat() const override { return m_format; }
 
-  ID3D11Texture2D* GetD3DTexture() const { return m_texture.Get(); }
-  ID3D11ShaderResourceView* GetD3DSRV() const { return m_srv.Get(); }
-  ID3D11ShaderResourceView* const* GetD3DSRVArray() const { return m_srv.GetAddressOf(); }
-  bool IsDynamic() const { return m_dynamic; }
-
-  static std::unique_ptr<D3D11HostDisplayTexture> Create(ID3D11Device* device, u32 width, u32 height, const void* data,
-                                                         u32 data_stride, bool dynamic)
-  {
-    const CD3D11_TEXTURE2D_DESC desc(DXGI_FORMAT_R8G8B8A8_UNORM, width, height, 1, 1, D3D11_BIND_SHADER_RESOURCE,
-                                     dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_DEFAULT,
-                                     dynamic ? D3D11_CPU_ACCESS_WRITE : 0, 1, 0, 0);
-    const D3D11_SUBRESOURCE_DATA srd{data, data_stride, data_stride * height};
-    ComPtr<ID3D11Texture2D> texture;
-    HRESULT hr = device->CreateTexture2D(&desc, data ? &srd : nullptr, texture.GetAddressOf());
-    if (FAILED(hr))
-      return {};
-
-    const CD3D11_SHADER_RESOURCE_VIEW_DESC srv_desc(D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 1, 0,
-                                                    1);
-    ComPtr<ID3D11ShaderResourceView> srv;
-    hr = device->CreateShaderResourceView(texture.Get(), &srv_desc, srv.GetAddressOf());
-    if (FAILED(hr))
-      return {};
-
-    return std::make_unique<D3D11HostDisplayTexture>(std::move(texture), std::move(srv), width, height, dynamic);
-  }
+  ALWAYS_INLINE ID3D11Texture2D* GetD3DTexture() const { return m_texture.GetD3DTexture(); }
+  ALWAYS_INLINE ID3D11ShaderResourceView* GetD3DSRV() const { return m_texture.GetD3DSRV(); }
+  ALWAYS_INLINE ID3D11ShaderResourceView* const* GetD3DSRVArray() const { return m_texture.GetD3DSRVArray(); }
+  ALWAYS_INLINE bool IsDynamic() const { return m_dynamic; }
 
 private:
-  ComPtr<ID3D11Texture2D> m_texture;
-  ComPtr<ID3D11ShaderResourceView> m_srv;
-  u32 m_width;
-  u32 m_height;
+  D3D11::Texture m_texture;
+  HostDisplayPixelFormat m_format;
   bool m_dynamic;
 };
 
@@ -104,10 +80,27 @@ bool D3D11HostDisplay::HasRenderSurface() const
   return static_cast<bool>(m_swap_chain);
 }
 
-std::unique_ptr<HostDisplayTexture> D3D11HostDisplay::CreateTexture(u32 width, u32 height, const void* initial_data,
-                                                                    u32 initial_data_stride, bool dynamic)
+static constexpr std::array<DXGI_FORMAT, static_cast<u32>(HostDisplayPixelFormat::Count)>
+  s_display_pixel_format_mapping = {{DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM,
+                                     DXGI_FORMAT_B5G6R5_UNORM, DXGI_FORMAT_B5G5R5A1_UNORM}};
+
+std::unique_ptr<HostDisplayTexture> D3D11HostDisplay::CreateTexture(u32 width, u32 height, u32 layers, u32 levels,
+                                                                    u32 samples, HostDisplayPixelFormat format,
+                                                                    const void* data, u32 data_stride,
+                                                                    bool dynamic /* = false */)
 {
-  return D3D11HostDisplayTexture::Create(m_device.Get(), width, height, initial_data, initial_data_stride, dynamic);
+  if (layers != 1)
+    return {};
+
+  D3D11::Texture tex;
+  if (!tex.Create(m_device.Get(), width, height, levels, samples,
+                  s_display_pixel_format_mapping[static_cast<u32>(format)], D3D11_BIND_SHADER_RESOURCE, data,
+                  data_stride, dynamic))
+  {
+    return {};
+  }
+
+  return std::make_unique<D3D11HostDisplayTexture>(std::move(tex), format, dynamic);
 }
 
 void D3D11HostDisplay::UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height,
@@ -174,10 +167,6 @@ bool D3D11HostDisplay::DownloadTexture(const void* texture_handle, HostDisplayPi
   }
 }
 
-static constexpr std::array<DXGI_FORMAT, static_cast<u32>(HostDisplayPixelFormat::Count)>
-  s_display_pixel_format_mapping = {{DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM,
-                                     DXGI_FORMAT_B5G6R5_UNORM, DXGI_FORMAT_B5G5R5A1_UNORM}};
-
 bool D3D11HostDisplay::SupportsDisplayPixelFormat(HostDisplayPixelFormat format) const
 {
   const DXGI_FORMAT dfmt = s_display_pixel_format_mapping[static_cast<u32>(format)];
@@ -226,6 +215,25 @@ void D3D11HostDisplay::EndSetDisplayPixels()
   m_context->Unmap(m_display_pixels_texture.GetD3DTexture(), 0);
 }
 
+bool D3D11HostDisplay::GetHostRefreshRate(float* refresh_rate)
+{
+  if (m_swap_chain && IsFullscreen())
+  {
+    DXGI_SWAP_CHAIN_DESC desc;
+    if (SUCCEEDED(m_swap_chain->GetDesc(&desc)) && desc.BufferDesc.RefreshRate.Numerator > 0 &&
+        desc.BufferDesc.RefreshRate.Denominator > 0)
+    {
+      Log_InfoPrintf("using fs rr: %u %u", desc.BufferDesc.RefreshRate.Numerator,
+                     desc.BufferDesc.RefreshRate.Denominator);
+      *refresh_rate = static_cast<float>(desc.BufferDesc.RefreshRate.Numerator) /
+                      static_cast<float>(desc.BufferDesc.RefreshRate.Denominator);
+      return true;
+    }
+  }
+
+  return HostDisplay::GetHostRefreshRate(refresh_rate);
+}
+
 void D3D11HostDisplay::SetVSync(bool enabled)
 {
   m_vsync = enabled;
@@ -249,7 +257,7 @@ bool D3D11HostDisplay::CreateRenderDevice(const WindowInfo& wi, std::string_view
   u32 adapter_index;
   if (!adapter_name.empty())
   {
-    AdapterInfo adapter_info = GetAdapterInfo(temp_dxgi_factory.Get());
+    AdapterAndModeList adapter_info(GetAdapterAndModeList(temp_dxgi_factory.Get()));
     for (adapter_index = 0; adapter_index < static_cast<u32>(adapter_info.adapter_names.size()); adapter_index++)
     {
       if (adapter_name == adapter_info.adapter_names[adapter_index])
@@ -353,21 +361,11 @@ bool D3D11HostDisplay::InitializeRenderDevice(std::string_view shader_cache_dire
   if (!CreateResources())
     return false;
 
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext() && !CreateImGuiContext())
-    return false;
-#endif
-
   return true;
 }
 
 void D3D11HostDisplay::DestroyRenderDevice()
 {
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext())
-    DestroyImGuiContext();
-#endif
-
   DestroyResources();
   DestroyRenderSurface();
   m_context.Reset();
@@ -441,9 +439,14 @@ bool D3D11HostDisplay::CreateSwapChain(const DXGI_MODE_DESC* fullscreen_mode)
     }
   }
 
-  hr = m_dxgi_factory->MakeWindowAssociation(swap_chain_desc.OutputWindow, DXGI_MWA_NO_WINDOW_CHANGES);
-  if (FAILED(hr))
-    Log_WarningPrintf("MakeWindowAssociation() to disable ALT+ENTER failed");
+  ComPtr<IDXGIFactory> dxgi_factory;
+  hr = m_swap_chain->GetParent(IID_PPV_ARGS(dxgi_factory.GetAddressOf()));
+  if (SUCCEEDED(hr))
+  {
+    hr = dxgi_factory->MakeWindowAssociation(swap_chain_desc.OutputWindow, DXGI_MWA_NO_WINDOW_CHANGES);
+    if (FAILED(hr))
+      Log_WarningPrintf("MakeWindowAssociation() to disable ALT+ENTER failed");
+  }
 
   return CreateSwapChainRTV();
 }
@@ -473,13 +476,11 @@ bool D3D11HostDisplay::CreateSwapChainRTV()
   m_window_info.surface_width = backbuffer_desc.Width;
   m_window_info.surface_height = backbuffer_desc.Height;
 
-#ifdef WITH_IMGUI
   if (ImGui::GetCurrentContext())
   {
     ImGui::GetIO().DisplaySize.x = static_cast<float>(backbuffer_desc.Width);
     ImGui::GetIO().DisplaySize.y = static_cast<float>(backbuffer_desc.Height);
   }
-#endif
 
   return true;
 }
@@ -666,36 +667,28 @@ void D3D11HostDisplay::DestroyResources()
 
 bool D3D11HostDisplay::CreateImGuiContext()
 {
-#ifdef WITH_IMGUI
   ImGui::GetIO().DisplaySize.x = static_cast<float>(m_window_info.surface_width);
   ImGui::GetIO().DisplaySize.y = static_cast<float>(m_window_info.surface_height);
-
-  if (!ImGui_ImplDX11_Init(m_device.Get(), m_context.Get()))
-    return false;
-
-  ImGui_ImplDX11_NewFrame();
-#endif
-  return true;
+  return ImGui_ImplDX11_Init(m_device.Get(), m_context.Get());
 }
 
 void D3D11HostDisplay::DestroyImGuiContext()
 {
-#ifdef WITH_IMGUI
   ImGui_ImplDX11_Shutdown();
-#endif
+}
+
+bool D3D11HostDisplay::UpdateImGuiFontTexture()
+{
+  ImGui_ImplDX11_CreateFontsTexture();
+  return true;
 }
 
 bool D3D11HostDisplay::Render()
 {
   if (ShouldSkipDisplayingFrame())
   {
-#ifdef WITH_IMGUI
     if (ImGui::GetCurrentContext())
-    {
       ImGui::Render();
-      ImGui_ImplDX11_NewFrame();
-    }
-#endif
 
     return false;
   }
@@ -706,10 +699,8 @@ bool D3D11HostDisplay::Render()
 
   RenderDisplay();
 
-#ifdef WITH_IMGUI
   if (ImGui::GetCurrentContext())
     RenderImGui();
-#endif
 
   RenderSoftwareCursor();
 
@@ -718,20 +709,13 @@ bool D3D11HostDisplay::Render()
   else
     m_swap_chain->Present(BoolToUInt32(m_vsync), 0);
 
-#ifdef WITH_IMGUI
-  if (ImGui::GetCurrentContext())
-    ImGui_ImplDX11_NewFrame();
-#endif
-
   return true;
 }
 
 void D3D11HostDisplay::RenderImGui()
 {
-#ifdef WITH_IMGUI
   ImGui::Render();
   ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-#endif
 }
 
 void D3D11HostDisplay::RenderDisplay()
@@ -820,19 +804,19 @@ void D3D11HostDisplay::RenderSoftwareCursor(s32 left, s32 top, s32 width, s32 he
   m_context->Draw(3, 0);
 }
 
-D3D11HostDisplay::AdapterInfo D3D11HostDisplay::GetAdapterInfo()
+HostDisplay::AdapterAndModeList D3D11HostDisplay::StaticGetAdapterAndModeList()
 {
   ComPtr<IDXGIFactory> dxgi_factory;
   HRESULT hr = CreateDXGIFactory(IID_PPV_ARGS(dxgi_factory.GetAddressOf()));
   if (FAILED(hr))
     return {};
 
-  return GetAdapterInfo(dxgi_factory.Get());
+  return GetAdapterAndModeList(dxgi_factory.Get());
 }
 
-D3D11HostDisplay::AdapterInfo D3D11HostDisplay::GetAdapterInfo(IDXGIFactory* dxgi_factory)
+HostDisplay::AdapterAndModeList D3D11HostDisplay::GetAdapterAndModeList(IDXGIFactory* dxgi_factory)
 {
-  AdapterInfo adapter_info;
+  AdapterAndModeList adapter_info;
   ComPtr<IDXGIAdapter> current_adapter;
   while (SUCCEEDED(dxgi_factory->EnumAdapters(static_cast<UINT>(adapter_info.adapter_names.size()),
                                               current_adapter.ReleaseAndGetAddressOf())))
@@ -868,8 +852,8 @@ D3D11HostDisplay::AdapterInfo D3D11HostDisplay::GetAdapterInfo(IDXGIFactory* dxg
           {
             for (const DXGI_MODE_DESC& mode : modes)
             {
-              adapter_info.fullscreen_modes.push_back(StringUtil::StdStringFromFormat(
-                "%u x %u @ %f hz", mode.Width, mode.Height,
+              adapter_info.fullscreen_modes.push_back(CommonHostInterface::GetFullscreenModeString(
+                mode.Width, mode.Height,
                 static_cast<float>(mode.RefreshRate.Numerator) / static_cast<float>(mode.RefreshRate.Denominator)));
             }
           }
@@ -898,6 +882,11 @@ D3D11HostDisplay::AdapterInfo D3D11HostDisplay::GetAdapterInfo(IDXGIFactory* dxg
   return adapter_info;
 }
 
+HostDisplay::AdapterAndModeList D3D11HostDisplay::GetAdapterAndModeList()
+{
+  return GetAdapterAndModeList(m_dxgi_factory.Get());
+}
+
 bool D3D11HostDisplay::SetPostProcessingChain(const std::string_view& config)
 {
   if (config.empty())
@@ -914,7 +903,7 @@ bool D3D11HostDisplay::SetPostProcessingChain(const std::string_view& config)
   m_post_processing_stages.clear();
 
   D3D11::ShaderCache shader_cache;
-  shader_cache.Open(g_host_interface->GetShaderCacheBasePath(), m_device->GetFeatureLevel(),
+  shader_cache.Open(g_host_interface->GetShaderCacheBasePath(), m_device->GetFeatureLevel(), SHADER_CACHE_VERSION,
                     g_settings.gpu_use_debug_device);
 
   FrontendCommon::PostProcessingShaderGen shadergen(HostDisplay::RenderAPI::D3D11, true);

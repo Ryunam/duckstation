@@ -50,6 +50,7 @@ struct Entry
   std::optional<float> gpu_pgxp_depth_threshold;
 
   // user settings
+  std::optional<u32> runahead_frames;
   std::optional<u32> cpu_overclock_numerator;
   std::optional<u32> cpu_overclock_denominator;
   std::optional<bool> cpu_overclock_enable;
@@ -69,6 +70,7 @@ struct Entry
   std::optional<GPUTextureFilter> gpu_texture_filter;
   std::optional<bool> gpu_widescreen_hack;
   std::optional<bool> gpu_pgxp;
+  std::optional<bool> gpu_pgxp_projection_precision;
   std::optional<bool> gpu_pgxp_depth_buffer;
   std::optional<ControllerType> controller_1_type;
   std::optional<ControllerType> controller_2_type;
@@ -85,6 +87,8 @@ struct Entry
 
   bool LoadFromStream(ByteStream* stream);
   bool SaveToStream(ByteStream* stream) const;
+
+  u32 GetUserSettingsCount() const;
 
   void ApplySettings(bool display_osd_messages) const;
 

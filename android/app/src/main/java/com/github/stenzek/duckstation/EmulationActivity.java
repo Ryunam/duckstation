@@ -11,11 +11,15 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Vibrator;
 import android.util.Log;
+import android.view.Display;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.View;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.ListView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -38,7 +42,6 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private boolean mApplySettingsOnSurfaceRestored = false;
     private String mGameTitle = null;
     private EmulationSurfaceView mContentView;
-    private int mSaveStateSlot = 0;
 
     private boolean getBooleanSetting(String key, boolean defaultValue) {
         return mPreferences.getBoolean(key, defaultValue);
@@ -101,19 +104,25 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
     }
 
-    public void reportMessage(String message) {
-        Log.i("EmulationActivity", message);
-        runOnUiThread(() -> {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT);
-        });
+    private EmulationThread mEmulationThread;
+
+    private void stopEmulationThread() {
+        if (mEmulationThread == null)
+            return;
+
+        mEmulationThread.stopAndJoin();
+        mEmulationThread = null;
     }
 
     public void onEmulationStarted() {
+        runOnUiThread(() -> {
+            updateRequestedOrientation();
+            updateOrientation();
+        });
     }
 
     public void onEmulationStopped() {
         runOnUiThread(() -> {
-            AndroidHostInterface.getInstance().stopEmulationThread();
             if (!mWasDestroyed && !mStopRequested)
                 finish();
         });
@@ -125,10 +134,32 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         });
     }
 
+    public float getRefreshRate() {
+        WindowManager windowManager = getWindowManager();
+        if (windowManager == null) {
+            windowManager = ((WindowManager) getSystemService(Context.WINDOW_SERVICE));
+            if (windowManager == null)
+                return -1.0f;
+        }
+
+        Display display = windowManager.getDefaultDisplay();
+        if (display == null)
+            return -1.0f;
+
+        return display.getRefreshRate();
+    }
+
+    public void openPauseMenu() {
+        runOnUiThread(() -> {
+            showMenu();
+        });
+    }
+
     private void doApplySettings() {
         AndroidHostInterface.getInstance().applySettings();
         updateRequestedOrientation();
         updateControllers();
+        updateSustainedPerformanceMode();
     }
 
     private void applySettings() {
@@ -159,8 +190,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         // Once we get a surface, we can boot.
-        if (AndroidHostInterface.getInstance().isEmulationThreadRunning()) {
-            AndroidHostInterface.getInstance().surfaceChanged(holder.getSurface(), format, width, height);
+        AndroidHostInterface.getInstance().surfaceChanged(holder.getSurface(), format, width, height);
+
+        if (mEmulationThread != null) {
             updateOrientation();
 
             if (mApplySettingsOnSurfaceRestored) {
@@ -172,23 +204,19 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
 
         final String bootPath = getIntent().getStringExtra("bootPath");
-        final boolean resumeState = getIntent().getBooleanExtra("resumeState", false);
+        final boolean saveStateOnExit = getBooleanSetting("Main/SaveStateOnExit", true);
+        final boolean resumeState = getIntent().getBooleanExtra("resumeState", saveStateOnExit);
         final String bootSaveStatePath = getIntent().getStringExtra("saveStatePath");
 
-        AndroidHostInterface.getInstance().startEmulationThread(this, holder.getSurface(), bootPath, resumeState, bootSaveStatePath);
-        updateRequestedOrientation();
-        updateOrientation();
+        mEmulationThread = EmulationThread.create(this, bootPath, resumeState, bootSaveStatePath);
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        if (!AndroidHostInterface.getInstance().isEmulationThreadRunning())
-            return;
-
         Log.i("EmulationActivity", "Surface destroyed");
 
         // Save the resume state in case we never get back again...
-        if (!mStopRequested)
+        if (AndroidHostInterface.getInstance().isEmulationThreadRunning() && !mStopRequested)
             AndroidHostInterface.getInstance().saveResumeState(true);
 
         AndroidHostInterface.getInstance().surfaceChanged(null, 0, 0, 0);
@@ -196,9 +224,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        mPreferences = PreferenceManager.getDefaultSharedPreferences(this);
         super.onCreate(savedInstanceState);
 
-        mPreferences = PreferenceManager.getDefaultSharedPreferences(this);
         Log.i("EmulationActivity", "OnCreate");
 
         // we might be coming from a third-party launcher if the host interface isn't setup
@@ -218,6 +246,10 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             mContentView.setFocusedByDefault(true);
         }
         mContentView.requestFocus();
+
+        // Sort out rotation.
+        updateOrientation();
+        updateSustainedPerformanceMode();
 
         // Hook up controller input.
         updateControllers();
@@ -240,9 +272,9 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     protected void onDestroy() {
         super.onDestroy();
         Log.i("EmulationActivity", "OnStop");
-        if (AndroidHostInterface.getInstance().isEmulationThreadRunning()) {
+        if (mEmulationThread != null) {
             mWasDestroyed = true;
-            AndroidHostInterface.getInstance().stopEmulationThread();
+            stopEmulationThread();
         }
 
         unregisterInputDeviceListener();
@@ -262,8 +294,19 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                 applySettings();
             }
         } else if (requestCode == REQUEST_IMPORT_PATCH_CODES) {
-            if (data != null)
-                importPatchesFromFile(data.getData());
+            if (data == null)
+                return;
+
+            importPatchesFromFile(data.getData());
+        } else if (requestCode == REQUEST_CHANGE_DISC_FILE) {
+            if (data == null)
+                return;
+
+            String path = GameDirectoriesActivity.getPathFromUri(this, data.getData());
+            if (path == null)
+                return;
+
+            AndroidHostInterface.getInstance().setMediaFilename(path);
         }
     }
 
@@ -317,9 +360,6 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     }
 
     private void updateOrientation(int newOrientation) {
-        if (!AndroidHostInterface.getInstance().isEmulationThreadRunning())
-            return;
-
         if (newOrientation == Configuration.ORIENTATION_PORTRAIT)
             AndroidHostInterface.getInstance().setDisplayAlignment(AndroidHostInterface.DISPLAY_ALIGNMENT_TOP_OR_LEFT);
         else
@@ -343,6 +383,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     private static final int REQUEST_CODE_SETTINGS = 0;
     private static final int REQUEST_IMPORT_PATCH_CODES = 1;
+    private static final int REQUEST_CHANGE_DISC_FILE = 2;
 
     private void onMenuClosed() {
         enableFullscreenImmersive();
@@ -358,42 +399,36 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         }
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        if (mGameTitle != null && !mGameTitle.isEmpty())
+            builder.setTitle(mGameTitle);
         builder.setItems(R.array.emulation_menu, (dialogInterface, i) -> {
             switch (i) {
-                case 0:     // Quick Load
+                case 0:     // Load State
                 {
-                    AndroidHostInterface.getInstance().loadState(false, mSaveStateSlot);
-                    onMenuClosed();
+                    showSaveStateMenu(false);
                     return;
                 }
 
-                case 1:     // Quick Save
+                case 1:     // Save State
                 {
-                    AndroidHostInterface.getInstance().saveState(false, mSaveStateSlot);
-                    onMenuClosed();
+                    showSaveStateMenu(true);
                     return;
                 }
 
-                case 2:     // Save State Slot
-                {
-                    showSaveStateSlotMenu();
-                    return;
-                }
-
-                case 3:     // Toggle Fast Forward
+                case 2:     // Toggle Fast Forward
                 {
                     AndroidHostInterface.getInstance().setFastForwardEnabled(!AndroidHostInterface.getInstance().isFastForwardEnabled());
                     onMenuClosed();
                     return;
                 }
 
-                case 4:     // More Options
+                case 3:     // More Options
                 {
                     showMoreMenu();
                     return;
                 }
 
-                case 5:     // Quit
+                case 4:     // Quit
                 {
                     mStopRequested = true;
                     finish();
@@ -405,15 +440,34 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         builder.create().show();
     }
 
-    private void showSaveStateSlotMenu() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setSingleChoiceItems(R.array.emulation_save_state_slot_menu, mSaveStateSlot, (dialogInterface, i) -> {
-            mSaveStateSlot = i;
-            dialogInterface.dismiss();
+    private void showSaveStateMenu(boolean saving) {
+        final SaveStateInfo[] infos = AndroidHostInterface.getInstance().getSaveStateInfo(true);
+        if (infos == null) {
+            onMenuClosed();
+            return;
+        }
+
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        final ListView listView = new ListView(this);
+        listView.setAdapter(new SaveStateInfo.ListAdapter(this, infos));
+        builder.setView(listView);
+        builder.setOnDismissListener((dialog) -> {
             onMenuClosed();
         });
-        builder.setOnCancelListener(dialogInterface -> onMenuClosed());
-        builder.create().show();
+
+        final AlertDialog dialog = builder.create();
+
+        listView.setOnItemClickListener((parent, view, position, id) -> {
+            SaveStateInfo info = infos[position];
+            if (saving) {
+                AndroidHostInterface.getInstance().saveState(info.isGlobal(), info.getSlot());
+            } else {
+                AndroidHostInterface.getInstance().loadState(info.isGlobal(), info.getSlot());
+            }
+            dialog.dismiss();
+        });
+
+        dialog.show();
     }
 
     private void showMoreMenu() {
@@ -442,26 +496,17 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
                     return;
                 }
 
-                case 3:     // Settings
-                {
-                    Intent intent = new Intent(EmulationActivity.this, SettingsActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                    startActivityForResult(intent, REQUEST_CODE_SETTINGS);
-                    return;
-                }
-
-                case 4:     // Change Touchscreen Controller
+                case 3:     // Change Touchscreen Controller
                 {
                     showTouchscreenControllerMenu();
                     return;
                 }
 
-                case 5:     // Edit Touchscreen Controller Layout
+                case 4:     // Settings
                 {
-                    if (mTouchscreenController != null)
-                        mTouchscreenController.startLayoutEditing();
-
-                    onMenuClosed();
+                    Intent intent = new Intent(EmulationActivity.this, SettingsActivity.class);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivityForResult(intent, REQUEST_CODE_SETTINGS);
                     return;
                 }
             }
@@ -472,43 +517,104 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     private void showTouchscreenControllerMenu() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setItems(R.array.settings_touchscreen_controller_view_entries, (dialogInterface, i) -> {
-            String[] values = getResources().getStringArray(R.array.settings_touchscreen_controller_view_values);
-            setStringSetting("Controller1/TouchscreenControllerView", values[i]);
-            updateControllers();
-            onMenuClosed();
+        if (mGameTitle != null && !mGameTitle.isEmpty())
+            builder.setTitle(mGameTitle);
+
+        builder.setItems(R.array.emulation_touchscreen_menu, (dialogInterface, i) -> {
+            switch (i) {
+                case 0:     // Change Type
+                {
+                    final String currentValue = getStringSetting("Controller1/TouchscreenControllerView", "");
+                    final String[] values = getResources().getStringArray(R.array.settings_touchscreen_controller_view_values);
+                    int currentIndex = -1;
+                    for (int k = 0; k < values.length; k++) {
+                        if (currentValue.equals(values[k])) {
+                            currentIndex = k;
+                            break;
+                        }
+                    }
+
+                    final AlertDialog.Builder subBuilder = new AlertDialog.Builder(this);
+                    subBuilder.setTitle(R.string.dialog_touchscreen_controller_type);
+                    subBuilder.setSingleChoiceItems(R.array.settings_touchscreen_controller_view_entries, currentIndex, (dialog, j) -> {
+                        setStringSetting("Controller1/TouchscreenControllerView", values[j]);
+                        updateControllers();
+                    });
+                    subBuilder.setNegativeButton(R.string.dialog_done, (dialog, which) -> {
+                        dialog.dismiss();
+                    });
+                    subBuilder.setOnDismissListener(dialog -> onMenuClosed());
+                    subBuilder.create().show();
+                }
+                break;
+
+                case 1:     // Change Opacity
+                {
+                    if (mTouchscreenController != null) {
+                        AlertDialog.Builder subBuilder = mTouchscreenController.createOpacityDialog(this);
+                        subBuilder.setOnDismissListener(dialog -> onMenuClosed());
+                        subBuilder.create().show();
+                    }
+                }
+                break;
+
+                case 2:     // Add/Remove Buttons
+                {
+                    if (mTouchscreenController != null) {
+                        AlertDialog.Builder subBuilder = mTouchscreenController.createAddRemoveButtonDialog(this);
+                        subBuilder.setOnDismissListener(dialog -> onMenuClosed());
+                        subBuilder.create().show();
+                    }
+                }
+                break;
+
+                case 3:     // Edit Layout
+                {
+                    if (mTouchscreenController != null)
+                        mTouchscreenController.startLayoutEditing();
+                }
+                break;
+            }
         });
-        builder.setOnCancelListener(dialogInterface -> onMenuClosed());
+
+        builder.setOnDismissListener(dialogInterface -> onMenuClosed());
         builder.create().show();
+
+        /*
+
+        */
     }
 
     private void showPatchesMenu() {
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+
         final PatchCode[] codes = AndroidHostInterface.getInstance().getPatchCodeList();
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-
-        CharSequence[] items = new CharSequence[(codes != null) ? (codes.length + 1) : 1];
-        items[0] = getString(R.string.emulation_activity_import_patch_codes);
         if (codes != null) {
+            CharSequence[] items = new CharSequence[codes.length];
+            boolean[] itemsChecked = new boolean[codes.length];
             for (int i = 0; i < codes.length; i++) {
                 final PatchCode cc = codes[i];
-                items[i + 1] = String.format("%s %s", cc.isEnabled() ? getString(R.string.emulation_activity_patch_on) : getString(R.string.emulation_activity_patch_off), cc.getDescription());
+                items[i] = cc.getDescription();
+                itemsChecked[i] = cc.isEnabled();
             }
+
+            builder.setMultiChoiceItems(items, itemsChecked, (dialogInterface, i, checked) -> {
+                AndroidHostInterface.getInstance().setPatchCodeEnabled(i, checked);
+            });
         }
 
-        builder.setItems(items, (dialogInterface, i) -> {
-            if (i > 0) {
-                AndroidHostInterface.getInstance().setPatchCodeEnabled(i - 1, !codes[i - 1].isEnabled());
-                onMenuClosed();
-            } else {
-                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-                intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                intent.setType("*/*");
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-                startActivityForResult(Intent.createChooser(intent, getString(R.string.emulation_activity_choose_patch_code_file)), REQUEST_IMPORT_PATCH_CODES);
-            }
+        builder.setNegativeButton(R.string.emulation_activity_ok, (dialogInterface, i) -> {
+            dialogInterface.dismiss();
         });
-        builder.setOnCancelListener(dialogInterface -> onMenuClosed());
+        builder.setNeutralButton(R.string.emulation_activity_import_patch_codes, (dialogInterface, i) -> {
+            Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            intent.setType("*/*");
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            startActivityForResult(Intent.createChooser(intent, getString(R.string.emulation_activity_choose_patch_code_file)), REQUEST_IMPORT_PATCH_CODES);
+        });
+
+        builder.setOnDismissListener(dialogInterface -> onMenuClosed());
         builder.create().show();
     }
 
@@ -522,21 +628,27 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private void showDiscChangeMenu() {
         final String[] paths = AndroidHostInterface.getInstance().getMediaPlaylistPaths();
         final int currentPath = AndroidHostInterface.getInstance().getMediaPlaylistIndex();
-        if (paths == null) {
-            onMenuClosed();
-            return;
-        }
+        final int numPaths = (paths != null) ? paths.length : 0;
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
 
-        CharSequence[] items = new CharSequence[paths.length];
-        for (int i = 0; i < paths.length; i++)
+        CharSequence[] items = new CharSequence[numPaths + 1];
+        for (int i = 0; i < numPaths; i++)
             items[i] = GameListEntry.getFileNameForPath(paths[i]);
+        items[numPaths] = "Select New File...";
 
-        builder.setSingleChoiceItems(items, currentPath, (dialogInterface, i) -> {
-            AndroidHostInterface.getInstance().setMediaPlaylistIndex(i);
+        builder.setSingleChoiceItems(items, (currentPath < numPaths) ? currentPath : -1, (dialogInterface, i) -> {
             dialogInterface.dismiss();
             onMenuClosed();
+
+            if (i < numPaths) {
+                AndroidHostInterface.getInstance().setMediaPlaylistIndex(i);
+            } else {
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.setType("*/*");
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                startActivityForResult(Intent.createChooser(intent, getString(R.string.main_activity_choose_disc_image)), REQUEST_CHANGE_DISC_FILE);
+            }
         });
         builder.setOnCancelListener(dialogInterface -> onMenuClosed());
         builder.create().show();
@@ -636,5 +748,22 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
             else
                 mVibratorService.cancel();
         });
+    }
+
+    private boolean mSustainedPerformanceModeEnabled = false;
+
+    private void updateSustainedPerformanceMode() {
+        final boolean enabled = getBooleanSetting("Main/SustainedPerformanceMode", false);
+        if (mSustainedPerformanceModeEnabled == enabled)
+            return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            getWindow().setSustainedPerformanceMode(enabled);
+            Log.i("EmulationActivity", String.format("%s sustained performance mode.", enabled ? "enabling" : "disabling"));
+        } else {
+            Log.e("EmulationActivity", "Sustained performance mode not supported.");
+        }
+        mSustainedPerformanceModeEnabled = enabled;
+
     }
 }

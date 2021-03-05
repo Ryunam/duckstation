@@ -75,11 +75,17 @@ bool GPU_SW::Initialize(HostDisplay* host_display)
   return true;
 }
 
-void GPU_SW::Reset()
+bool GPU_SW::DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display)
 {
-  GPU::Reset();
+  // ignore the host texture for software mode, since we want to save vram here
+  return GPU::DoState(sw, nullptr, update_display);
+}
 
-  m_backend.Reset();
+void GPU_SW::Reset(bool clear_vram)
+{
+  GPU::Reset(clear_vram);
+
+  m_backend.Reset(clear_vram);
 }
 
 void GPU_SW::UpdateSettings()
@@ -249,7 +255,7 @@ void GPU_SW::CopyOut15Bit(u32 src_x, u32 src_y, u32 width, u32 height, u32 field
   }
   else
   {
-    dst_stride = Common::AlignUpPow2<u32>(width * sizeof(OutputPixelType), 4);
+    dst_stride = GPU_MAX_DISPLAY_WIDTH * sizeof(OutputPixelType);
     dst_ptr = m_display_texture_buffer.data() + (field != 0 ? dst_stride : 0);
   }
 
@@ -576,7 +582,6 @@ void GPU_SW::DispatchRenderCommand()
   }
 
   const GPURenderCommand rc{m_render_command.bits};
-  const bool dithering_enable = rc.IsDitheringEnabled() && m_GPUSTAT.dither_enable;
 
   switch (rc.primitive)
   {

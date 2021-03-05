@@ -32,8 +32,8 @@ public:
   virtual bool IsHardwareRenderer() const override;
 
   virtual bool Initialize(HostDisplay* host_display) override;
-  virtual void Reset() override;
-  virtual bool DoState(StateWrapper& sw, bool update_display) override;
+  virtual void Reset(bool clear_vram) override;
+  virtual bool DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display) override;
 
   void UpdateResolutionScale() override final;
   std::tuple<u32, u32> GetEffectiveDisplayResolution() override final;
@@ -101,14 +101,6 @@ protected:
     bool set_mask_while_drawing;
     bool check_mask_before_draw;
     bool use_depth_buffer;
-
-    // We need two-pass rendering when using BG-FG blending and texturing, as the transparency can be enabled
-    // on a per-pixel basis, and the opaque pixels shouldn't be blended at all.
-    bool NeedsTwoPassRendering() const
-    {
-      return transparency_mode == GPUTransparencyMode::BackgroundMinusForeground &&
-             texture_mode != GPUTextureMode::Disabled;
-    }
 
     // Returns the render mode for this batch.
     BatchRenderMode GetRenderMode() const
@@ -202,7 +194,7 @@ protected:
     m_draw_mode.SetTexturePageChanged();
   }
   void ClearVRAMDirtyRectangle() { m_vram_dirty_rect.SetInvalid(); }
-  void IncludeVRAMDityRectangle(const Common::Rectangle<u32>& rect);
+  void IncludeVRAMDirtyRectangle(const Common::Rectangle<u32>& rect);
 
   bool IsFlushed() const { return m_batch_current_vertex_ptr == m_batch_start_vertex_ptr; }
 
@@ -252,6 +244,15 @@ protected:
       return false;
 
     return true;
+  }
+
+  /// We need two-pass rendering when using BG-FG blending and texturing, as the transparency can be enabled
+  /// on a per-pixel basis, and the opaque pixels shouldn't be blended at all.
+  bool NeedsTwoPassRendering() const
+  {
+    return (m_batch.transparency_mode == GPUTransparencyMode::BackgroundMinusForeground &&
+            m_batch.texture_mode != GPUTextureMode::Disabled) ||
+           (m_batch.transparency_mode != GPUTransparencyMode::Disabled && !m_supports_dual_source_blend);
   }
 
   void FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color) override;

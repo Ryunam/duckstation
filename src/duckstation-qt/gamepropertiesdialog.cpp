@@ -268,6 +268,12 @@ void GamePropertiesDialog::populateGameSettings()
     m_trait_checkboxes[i]->setChecked(gs.HasTrait(static_cast<GameSettings::Trait>(i)));
   }
 
+  if (gs.runahead_frames.has_value())
+  {
+    QSignalBlocker sb(m_ui.userRunaheadFrames);
+    m_ui.userRunaheadFrames->setCurrentIndex(static_cast<int>(gs.runahead_frames.value()));
+  }
+
   if (gs.cpu_overclock_numerator.has_value() || gs.cpu_overclock_denominator.has_value())
   {
     const u32 numerator = gs.cpu_overclock_numerator.value_or(1);
@@ -400,6 +406,7 @@ void GamePropertiesDialog::populateGameSettings()
   populateBooleanUserSetting(m_ui.userWidescreenHack, gs.gpu_widescreen_hack);
   populateBooleanUserSetting(m_ui.userForce43For24Bit, gs.display_force_4_3_for_24bit);
   populateBooleanUserSetting(m_ui.userPGXP, gs.gpu_pgxp);
+  populateBooleanUserSetting(m_ui.userPGXPProjectionPrecision, gs.gpu_pgxp_projection_precision);
   populateBooleanUserSetting(m_ui.userPGXPDepthBuffer, gs.gpu_pgxp_depth_buffer);
 
   if (gs.controller_1_type.has_value())
@@ -489,6 +496,14 @@ void GamePropertiesDialog::connectUi()
     m_ui.computeHashes->setVisible(show_buttons);
     m_ui.verifyDump->setVisible(show_buttons);
     m_ui.exportCompatibilityInfo->setVisible(show_buttons);
+  });
+
+  connect(m_ui.userRunaheadFrames, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index) {
+    if (index <= 0)
+      m_game_settings.runahead_frames.reset();
+    else
+      m_game_settings.runahead_frames = static_cast<u32>(index - 1);
+    saveGameSettings();
   });
 
   connectBooleanUserSetting(m_ui.userEnableCPUClockSpeedControl, &m_game_settings.cpu_overclock_enable);
@@ -587,6 +602,7 @@ void GamePropertiesDialog::connectUi()
   connectBooleanUserSetting(m_ui.userWidescreenHack, &m_game_settings.gpu_widescreen_hack);
   connectBooleanUserSetting(m_ui.userForce43For24Bit, &m_game_settings.display_force_4_3_for_24bit);
   connectBooleanUserSetting(m_ui.userPGXP, &m_game_settings.gpu_pgxp);
+  connectBooleanUserSetting(m_ui.userPGXPProjectionPrecision, &m_game_settings.gpu_pgxp_projection_precision);
   connectBooleanUserSetting(m_ui.userPGXPDepthBuffer, &m_game_settings.gpu_pgxp_depth_buffer);
 
   connect(m_ui.userControllerType1, QOverload<int>::of(&QComboBox::currentIndexChanged), [this](int index) {

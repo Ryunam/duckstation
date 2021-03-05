@@ -43,12 +43,14 @@ public:
   virtual bool SupportsFullscreen() const override;
   virtual bool IsFullscreen() override;
   virtual bool SetFullscreen(bool fullscreen, u32 width, u32 height, float refresh_rate) override;
+  virtual AdapterAndModeList GetAdapterAndModeList() override;
   virtual void DestroyRenderSurface() override;
 
   virtual bool SetPostProcessingChain(const std::string_view& config) override;
 
-  std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, const void* initial_data,
-                                                    u32 initial_data_stride, bool dynamic) override;
+  std::unique_ptr<HostDisplayTexture> CreateTexture(u32 width, u32 height, u32 layers, u32 levels, u32 samples,
+                                                    HostDisplayPixelFormat format, const void* data, u32 data_stride,
+                                                    bool dynamic = false) override;
   void UpdateTexture(HostDisplayTexture* texture, u32 x, u32 y, u32 width, u32 height, const void* texture_data,
                      u32 texture_data_stride) override;
   bool DownloadTexture(const void* texture_handle, HostDisplayPixelFormat texture_format, u32 x, u32 y, u32 width,
@@ -63,7 +65,7 @@ public:
 
   virtual bool Render() override;
 
-  static std::vector<std::string> EnumerateAdapterNames();
+  static AdapterAndModeList StaticGetAdapterAndModeList(const WindowInfo* wi);
 
 protected:
   struct PushConstants
@@ -97,8 +99,9 @@ protected:
   virtual bool CreateResources() override;
   virtual void DestroyResources() override;
 
-  virtual bool CreateImGuiContext();
-  virtual void DestroyImGuiContext();
+  virtual bool CreateImGuiContext() override;
+  virtual void DestroyImGuiContext() override;
+  virtual bool UpdateImGuiFontTexture() override;
 
   void BeginSwapChainRenderPass(VkFramebuffer framebuffer);
   void RenderDisplay();

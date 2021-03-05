@@ -13,9 +13,18 @@ enum : u32
   VRAM_HEIGHT_MASK = VRAM_HEIGHT - 1,
   TEXTURE_PAGE_WIDTH = 256,
   TEXTURE_PAGE_HEIGHT = 256,
+
+  // In interlaced modes, we can exceed the 512 height of VRAM, up to 576 in PAL games.
+  GPU_MAX_DISPLAY_WIDTH = 720,
+  GPU_MAX_DISPLAY_HEIGHT = 576,
+
+  DITHER_MATRIX_SIZE = 4
+};
+
+enum : s32
+{
   MAX_PRIMITIVE_WIDTH = 1024,
   MAX_PRIMITIVE_HEIGHT = 512,
-  DITHER_MATRIX_SIZE = 4
 };
 
 enum class GPUPrimitive : u8
@@ -212,7 +221,7 @@ struct GPUTextureWindow
 static constexpr s32 DITHER_MATRIX[DITHER_MATRIX_SIZE][DITHER_MATRIX_SIZE] = {{-4, +0, -3, +1},  // row 0
                                                                               {+2, -2, +3, -1},  // row 1
                                                                               {-3, +1, -4, +0},  // row 2
-                                                                              {+4, -1, +2, -2}}; // row 3
+                                                                              {+3, -1, +2, -2}}; // row 3
 
 #ifdef _MSC_VER
 #pragma warning(push)

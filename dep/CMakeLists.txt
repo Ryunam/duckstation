@@ -19,12 +19,15 @@ if(NOT BUILD_LIBRETRO_CORE)
   add_subdirectory(tinyxml2)
 endif()
 
+set(LIBSAMPLERATE_ENABLE_SINC_BEST_CONVERTER OFF)
+add_subdirectory(libsamplerate)
+
 if(ENABLE_DISCORD_PRESENCE)
   add_subdirectory(discord-rpc)
 endif()
 
-if(BUILD_SDL_FRONTEND)
-  add_subdirectory(nativefiledialog)
+if(ENABLE_CHEEVOS)
+  add_subdirectory(rcheevos)
 endif()
 
 if(BUILD_LIBRETRO_CORE)

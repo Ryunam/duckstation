@@ -3,6 +3,7 @@
 #include "core/host_interface.h"
 #include "core/system.h"
 #include "frontend-common/common_host_interface.h"
+#include "qtutils.h"
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
 #include <QtCore/QSettings>
@@ -56,11 +57,6 @@ public Q_SLOTS:
 
 public:
   /// Thread-safe settings access.
-  std::string GetStringSettingValue(const char* section, const char* key, const char* default_value = "") override;
-  bool GetBoolSettingValue(const char* section, const char* key, bool default_value = false) override;
-  int GetIntSettingValue(const char* section, const char* key, int default_value = 0) override;
-  float GetFloatSettingValue(const char* section, const char* key, float default_value = 0.0f) override;
-  std::vector<std::string> GetSettingStringList(const char* section, const char* key);
   void SetBoolSettingValue(const char* section, const char* key, bool value);
   void SetIntSettingValue(const char* section, const char* key, int value);
   void SetFloatSettingValue(const char* section, const char* key, float value);
@@ -141,15 +137,13 @@ Q_SIGNALS:
   void exitRequested();
   void inputProfileLoaded();
   void mouseModeRequested(bool relative, bool hide_cursor);
+  void achievementsLoaded(quint32 id, const QString& game_info_string, quint32 total, quint32 points);
 
 public Q_SLOTS:
   void setDefaultSettings();
   void applySettings(bool display_osd_messages = false);
   void updateInputMap();
   void applyInputProfile(const QString& profile_path);
-  void onDisplayWindowKeyEvent(int key, bool pressed);
-  void onDisplayWindowMouseMoveEvent(int x, int y);
-  void onDisplayWindowMouseButtonEvent(int button, bool pressed);
   void bootSystem(std::shared_ptr<const SystemBootParameters> params);
   void resumeSystemFromState(const QString& filename, bool boot_on_failure);
   void resumeSystemFromMostRecentState();
@@ -169,6 +163,8 @@ public Q_SLOTS:
   void stopDumpingAudio();
   void singleStepCPU();
   void dumpRAM(const QString& filename);
+  void dumpVRAM(const QString& filename);
+  void dumpSPURAM(const QString& filename);
   void saveScreenshot();
   void redrawDisplayWindow();
   void toggleFullscreen();
@@ -178,10 +174,16 @@ public Q_SLOTS:
   void reloadPostProcessingShaders();
   void requestRenderWindowScale(qreal scale);
   void executeOnEmulationThread(std::function<void()> callback, bool wait = false);
+  void OnAchievementsRefreshed() override;
 
 private Q_SLOTS:
   void doStopThread();
-  void onHostDisplayWindowResized(int width, int height);
+  void onDisplayWindowMouseMoveEvent(int x, int y);
+  void onDisplayWindowMouseButtonEvent(int button, bool pressed);
+  void onDisplayWindowMouseWheelEvent(const QPoint& delta_angle);
+  void onDisplayWindowResized(int width, int height);
+  void onDisplayWindowFocused();
+  void onDisplayWindowKeyEvent(int key, bool pressed);
   void doBackgroundControllerPoll();
   void doSaveSettings();
 
@@ -190,7 +192,6 @@ protected:
   void ReleaseHostDisplay() override;
   bool IsFullscreen() const override;
   bool SetFullscreen(bool enabled) override;
-  void PollAndUpdate() override;
 
   void RequestExit() override;
   std::optional<HostKeyCode> GetHostKeyCode(const std::string_view key_code) const override;
@@ -199,14 +200,15 @@ protected:
   void OnSystemPaused(bool paused) override;
   void OnSystemDestroyed() override;
   void OnSystemPerformanceCountersUpdated() override;
-  void OnRunningGameChanged() override;
+  void OnRunningGameChanged(const std::string& path, CDImage* image, const std::string& game_code,
+                            const std::string& game_title) override;
   void OnSystemStateSaved(bool global, s32 slot) override;
 
-  void LoadSettings() override;
   void SetDefaultSettings(SettingsInterface& si) override;
-  void UpdateInputMap() override;
+  void ApplySettings(bool display_osd_messages) override;
 
   void SetMouseMode(bool relative, bool hide_cursor) override;
+  void RunLater(std::function<void()> func) override;
 
 private:
   enum : u32
@@ -214,7 +216,10 @@ private:
     BACKGROUND_CONTROLLER_POLLING_INTERVAL =
       100, /// Interval at which the controllers are polled when the system is not active.
 
-    SETTINGS_SAVE_DELAY = 1000
+    SETTINGS_SAVE_DELAY = 1000,
+
+    /// Crappy solution to the Qt indices being massive.
+    IMGUI_KEY_MASK = 511,
   };
 
   using InputButtonHandler = std::function<void(bool)>;
@@ -243,8 +248,8 @@ private:
   void startBackgroundControllerPollTimer();
   void stopBackgroundControllerPollTimer();
 
-  void createImGuiContext(float framebuffer_scale);
-  void destroyImGuiContext();
+  void setImGuiFont();
+  void setImGuiKeyMap();
 
   void createThread();
   void stopThread();
@@ -257,9 +262,6 @@ private:
   void updateDisplayState();
   void queueSettingsSave();
   void wakeThread();
-
-  std::unique_ptr<INISettingsInterface> m_settings_interface;
-  std::recursive_mutex m_settings_mutex;
 
   std::unique_ptr<QTranslator> m_translator;
 
@@ -277,4 +279,5 @@ private:
   bool m_is_rendering_to_main = false;
   bool m_is_fullscreen = false;
   bool m_is_exclusive_fullscreen = false;
+  bool m_lost_exclusive_fullscreen = false;
 };

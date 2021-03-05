@@ -119,6 +119,7 @@
     <addaction name="actionGeneralSettings"/>
     <addaction name="actionBIOSSettings"/>
     <addaction name="actionConsoleSettings"/>
+    <addaction name="actionEmulationSettings"/>
     <addaction name="actionGameListSettings"/>
     <addaction name="actionHotkeySettings"/>
     <addaction name="actionControllerSettings"/>
@@ -127,6 +128,7 @@
     <addaction name="actionEnhancementSettings"/>
     <addaction name="actionPostProcessingSettings"/>
     <addaction name="actionAudioSettings"/>
+    <addaction name="actionAchievementSettings"/>
     <addaction name="actionAdvancedSettings"/>
     <addaction name="separator"/>
     <addaction name="actionAddGameDirectory"/>
@@ -171,15 +173,19 @@
     <addaction name="menuCPUExecutionMode"/>
     <addaction name="menuRenderer"/>
     <addaction name="menuCropMode"/>
+    <addaction name="actionDisableAllEnhancements"/>
     <addaction name="actionDisableInterlacing"/>
     <addaction name="actionForceNTSCTimings"/>
+    <addaction name="separator"/>
+    <addaction name="actionCPUDebugger"/>
+    <addaction name="separator"/>
+    <addaction name="actionDumpRAM"/>
+    <addaction name="actionDumpVRAM"/>
+    <addaction name="actionDumpSPURAM"/>
     <addaction name="separator"/>
     <addaction name="actionDebugDumpCPUtoVRAMCopies"/>
     <addaction name="actionDebugDumpVRAMtoCPUCopies"/>
     <addaction name="actionDumpAudio"/>
-    <addaction name="separator"/>
-    <addaction name="actionCPUDebugger"/>
-    <addaction name="actionDumpRAM"/>
     <addaction name="separator"/>
     <addaction name="actionDebugShowVRAM"/>
     <addaction name="actionDebugShowGPUState"/>
@@ -199,6 +205,7 @@
      </property>
     </widget>
     <addaction name="actionViewToolbar"/>
+    <addaction name="actionViewLockToolbar"/>
     <addaction name="actionViewStatusBar"/>
     <addaction name="separator"/>
     <addaction name="actionViewGameList"/>
@@ -372,6 +379,15 @@
     <string>C&amp;onsole Settings...</string>
    </property>
   </action>
+  <action name="actionEmulationSettings">
+   <property name="icon">
+    <iconset resource="resources/resources.qrc">
+     <normaloff>:/icons/applications-other.png</normaloff>:/icons/applications-other.png</iconset>
+   </property>
+   <property name="text">
+    <string>E&amp;mulation Settings...</string>
+   </property>
+  </action>
   <action name="actionControllerSettings">
    <property name="icon">
     <iconset resource="resources/resources.qrc">
@@ -384,7 +400,7 @@
   <action name="actionHotkeySettings">
    <property name="icon">
     <iconset resource="resources/resources.qrc">
-     <normaloff>:/icons/applications-other.png</normaloff>:/icons/applications-other.png</iconset>
+     <normaloff>:/icons/preferences-desktop-keyboard-shortcuts.png</normaloff>:/icons/preferences-desktop-keyboard-shortcuts.png</iconset>
    </property>
    <property name="text">
     <string>&amp;Hotkey Settings...</string>
@@ -488,6 +504,15 @@
     <string>Audio Settings...</string>
    </property>
   </action>
+  <action name="actionAchievementSettings">
+   <property name="icon">
+    <iconset resource="resources/resources.qrc">
+     <normaloff>:/icons/trophy.png</normaloff>:/icons/trophy.png</iconset>
+   </property>
+   <property name="text">
+    <string>Achievement Settings...</string>
+   </property>
+  </action>
   <action name="actionGameListSettings">
    <property name="icon">
     <iconset resource="resources/resources.qrc">
@@ -582,6 +607,14 @@
     <string>Dump VRAM to CPU Copies</string>
    </property>
   </action>
+  <action name="actionDisableAllEnhancements">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Disable All Enhancements</string>
+   </property>
+  </action> 
   <action name="actionDisableInterlacing">
    <property name="checkable">
     <bool>true</bool>
@@ -609,6 +642,16 @@
   <action name="actionDumpRAM">
    <property name="text">
     <string>Dump RAM...</string>
+   </property>
+  </action>
+  <action name="actionDumpVRAM">
+   <property name="text">
+    <string>Dump VRAM...</string>
+   </property>
+  </action>
+  <action name="actionDumpSPURAM">
+   <property name="text">
+    <string>Dump SPU RAM...</string>
    </property>
   </action>
   <action name="actionDebugShowGPUState">
@@ -698,6 +741,17 @@
    </property>
    <property name="text">
     <string>&amp;Toolbar</string>
+   </property>
+  </action>
+  <action name="actionViewLockToolbar">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Lock Toolbar</string>
    </property>
   </action>
   <action name="actionViewStatusBar">

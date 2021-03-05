@@ -37,6 +37,9 @@ set(SRCS
   displaysettingswidget.cpp
   displaysettingswidget.h
   displaysettingswidget.ui
+  emulationsettingswidget.cpp
+  emulationsettingswidget.h
+  emulationsettingswidget.ui
   enhancementsettingswidget.cpp
   enhancementsettingswidget.h
   enhancementsettingswidget.ui
@@ -99,6 +102,17 @@ set(SRCS
   settingsdialog.h
   settingsdialog.ui
 )
+
+if(WITH_CHEEVOS)
+  set(SRCS ${SRCS}
+    achievementlogindialog.cpp
+    achievementlogindialog.h
+    achievementlogindialog.ui
+    achievementsettingswidget.cpp
+    achievementsettingswidget.h
+    achievementsettingswidget.ui
+  )
+endif()
 
 set(TS_FILES
   translations/duckstation-qt_de.ts

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.os.Environment;
+import android.os.Process;
 import android.util.Log;
 import android.view.Surface;
 import android.widget.Toast;
@@ -19,12 +20,6 @@ public class AndroidHostInterface {
 
     private long mNativePointer;
     private Context mContext;
-
-    static public native String getScmVersion();
-
-    static public native String getFullScmVersion();
-
-    static public native AndroidHostInterface create(Context context, String userDirectory);
 
     public AndroidHostInterface(Context context) {
         this.mContext = context;
@@ -46,15 +41,27 @@ public class AndroidHostInterface {
         }
     }
 
+    public void setContext(Context context) {
+        mContext = context;
+    }
+
+    static public native String getScmVersion();
+
+    static public native String getFullScmVersion();
+
+    static public native boolean setThreadAffinity(int[] cpus);
+
+    static public native AndroidHostInterface create(Context context, String userDirectory);
+
     public native boolean isEmulationThreadRunning();
 
-    public native boolean startEmulationThread(EmulationActivity emulationActivity, Surface surface, String filename, boolean resumeState, String state_filename);
+    public native boolean runEmulationThread(EmulationActivity emulationActivity, String filename, boolean resumeState, String state_filename);
 
     public native boolean isEmulationThreadPaused();
 
     public native void pauseEmulationThread(boolean paused);
 
-    public native void stopEmulationThread();
+    public native void stopEmulationThreadLoop();
 
     public native boolean hasSurface();
 
@@ -130,6 +137,10 @@ public class AndroidHostInterface {
     public native int getMediaPlaylistIndex();
 
     public native boolean setMediaPlaylistIndex(int index);
+
+    public native boolean setMediaFilename(String filename);
+
+    public native SaveStateInfo[] getSaveStateInfo(boolean includeEmpty);
 
     static {
         System.loadLibrary("duckstation-native");

@@ -2,10 +2,12 @@
 #include "common/assert.h"
 #include "common/d3d11/shader_compiler.h"
 #include "common/log.h"
+#include "common/state_wrapper.h"
 #include "common/timer.h"
 #include "gpu_hw_shadergen.h"
 #include "host_display.h"
 #include "host_interface.h"
+#include "shader_cache_version.h"
 #include "system.h"
 Log_SetChannel(GPU_HW_D3D11);
 
@@ -81,11 +83,54 @@ bool GPU_HW_D3D11::Initialize(HostDisplay* host_display)
   return true;
 }
 
-void GPU_HW_D3D11::Reset()
+void GPU_HW_D3D11::Reset(bool clear_vram)
 {
-  GPU_HW::Reset();
+  GPU_HW::Reset(clear_vram);
 
-  ClearFramebuffer();
+  if (clear_vram)
+    ClearFramebuffer();
+}
+
+bool GPU_HW_D3D11::DoState(StateWrapper& sw, HostDisplayTexture** host_texture, bool update_display)
+{
+  if (host_texture)
+  {
+    ComPtr<ID3D11Resource> resource;
+
+    HostDisplayTexture* tex = *host_texture;
+    if (sw.IsReading())
+    {
+      if (tex->GetWidth() != m_vram_texture.GetWidth() || tex->GetHeight() != m_vram_texture.GetHeight() ||
+          tex->GetSamples() != m_vram_texture.GetSamples())
+      {
+        return false;
+      }
+
+      static_cast<ID3D11ShaderResourceView*>(tex->GetHandle())->GetResource(resource.GetAddressOf());
+      m_context->CopySubresourceRegion(m_vram_texture.GetD3DTexture(), 0, 0, 0, 0, resource.Get(), 0, nullptr);
+    }
+    else
+    {
+      if (!tex || tex->GetWidth() != m_vram_texture.GetWidth() || tex->GetHeight() != m_vram_texture.GetHeight() ||
+          tex->GetSamples() != m_vram_texture.GetSamples())
+      {
+        delete tex;
+
+        tex = m_host_display
+                ->CreateTexture(m_vram_texture.GetWidth(), m_vram_texture.GetHeight(), 1, 1,
+                                m_vram_texture.GetSamples(), HostDisplayPixelFormat::RGBA8, nullptr, 0, false)
+                .release();
+        *host_texture = tex;
+        if (!tex)
+          return false;
+      }
+
+      static_cast<ID3D11ShaderResourceView*>(tex->GetHandle())->GetResource(resource.GetAddressOf());
+      m_context->CopySubresourceRegion(resource.Get(), 0, 0, 0, 0, m_vram_texture.GetD3DTexture(), 0, nullptr);
+    }
+  }
+
+  return GPU_HW::DoState(sw, host_texture, update_display);
 }
 
 void GPU_HW_D3D11::ResetGraphicsAPIState()
@@ -211,8 +256,11 @@ bool GPU_HW_D3D11::CreateFramebuffer()
                                    D3D11_BIND_DEPTH_STENCIL) ||
       !m_vram_read_texture.Create(m_device.Get(), texture_width, texture_height, 1, 1, texture_format,
                                   D3D11_BIND_SHADER_RESOURCE) ||
-      !m_display_texture.Create(m_device.Get(), texture_width, texture_height, 1, 1, texture_format,
-                                D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) ||
+      !m_display_texture.Create(
+        m_device.Get(),
+        ((m_downsample_mode == GPUDownsampleMode::Adaptive) ? VRAM_WIDTH : GPU_MAX_DISPLAY_WIDTH) * m_resolution_scale,
+        GPU_MAX_DISPLAY_HEIGHT * m_resolution_scale, 1, 1, texture_format,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) ||
       !m_vram_encoding_texture.Create(m_device.Get(), VRAM_WIDTH, VRAM_HEIGHT, 1, 1, texture_format,
                                       D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) ||
       !m_vram_readback_texture.Create(m_device.Get(), VRAM_WIDTH, VRAM_HEIGHT, texture_format, false))
@@ -447,7 +495,7 @@ void GPU_HW_D3D11::DestroyStateObjects()
 bool GPU_HW_D3D11::CompileShaders()
 {
   D3D11::ShaderCache shader_cache;
-  shader_cache.Open(g_host_interface->GetShaderCacheBasePath(), m_device->GetFeatureLevel(),
+  shader_cache.Open(g_host_interface->GetShaderCacheBasePath(), m_device->GetFeatureLevel(), SHADER_CACHE_VERSION,
                     g_settings.gpu_use_debug_device);
 
   GPU_HW_ShaderGen shadergen(m_host_display->GetRenderAPI(), m_resolution_scale, m_multisamples, m_per_sample_shading,
@@ -461,6 +509,10 @@ bool GPU_HW_D3D11::CompileShaders()
   do                                                                                                                   \
   {                                                                                                                    \
     progress_value++;                                                                                                  \
+    if (System::IsStartupCancelled())                                                                                  \
+    {                                                                                                                  \
+      return false;                                                                                                    \
+    }                                                                                                                  \
     if (compile_time.GetTimeSeconds() >= 1.0f)                                                                         \
     {                                                                                                                  \
       compile_time.Reset();                                                                                            \
@@ -860,6 +912,9 @@ void GPU_HW_D3D11::UpdateDisplay()
       ID3D11PixelShader* display_pixel_shader =
         m_display_pixel_shaders[BoolToUInt8(m_GPUSTAT.display_area_color_depth_24)][static_cast<u8>(interlaced)].Get();
 
+      Assert(scaled_display_width <= m_display_texture.GetWidth() &&
+             scaled_display_height <= m_display_texture.GetHeight());
+
       SetViewportAndScissor(0, 0, scaled_display_width, scaled_display_height);
       DrawUtilityShader(display_pixel_shader, uniforms, sizeof(uniforms));
 
@@ -988,7 +1043,7 @@ void GPU_HW_D3D11::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 widt
     const Common::Rectangle<u32> dst_bounds = GetVRAMTransferBounds(dst_x, dst_y, width, height);
     if (m_vram_dirty_rect.Intersects(src_bounds))
       UpdateVRAMReadTexture();
-    IncludeVRAMDityRectangle(dst_bounds);
+    IncludeVRAMDirtyRectangle(dst_bounds);
 
     const VRAMCopyUBOData uniforms = GetVRAMCopyUBOData(src_x, src_y, dst_x, dst_y, width, height);
 
